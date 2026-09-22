@@ -1,0 +1,1 @@
+"""EduRAG application package."""
