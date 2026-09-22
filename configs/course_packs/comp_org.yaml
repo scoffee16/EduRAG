@@ -1,0 +1,50 @@
+course_pack:
+  name: "计算机组成原理"
+  code: "CS-COMP-ORG"
+  description: "微程序控制器、模型机、CPU设计"
+
+  parsers:
+    - type: pdf
+      handler: mineru
+    - type: pptx
+      handler: unstructured
+    - type: image
+      handler: qwen-vl
+    - type: vhdl
+      handler: tree-sitter-vhdl
+    - type: waveform
+      handler: wave-analyzer
+
+  knowledge_graph:
+    schema: "comp_org_schema.json"
+    entities:
+      - Instruction
+      - MicroAddress
+      - ControlSignal
+      - Register
+      - ALU
+      - BranchCondition
+    relations:
+      - instruction_has_microsequence
+      - microaddress_emits_signal
+      - branch_condition_determines_next
+      - signal_controls_component
+
+  tools:
+    - name: "vhdl_simulator"
+      type: "external"
+      endpoint: "http://localhost:8081/simulate"
+    - name: "waveform_checker"
+      type: "python"
+      module: "tools.waveform_checker"
+    - name: "microprogram_generator"
+      type: "python"
+      module: "tools.microprogram_gen"
+
+  retrieval_config:
+    text_weight: 0.4
+    table_weight: 0.2
+    image_weight: 0.2
+    code_weight: 0.2
+    rerank: true
+    hybrid_search: true
