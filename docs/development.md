@@ -74,3 +74,23 @@ docker compose down
 ```
 
 The application is exposed on port `8000` by default.
+
+## Known Issues
+
+### Starlette/httpx third-party deprecation warning
+
+`python -m pytest -q` currently emits one third-party warning:
+
+```text
+StarletteDeprecationWarning: Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.
+```
+
+The warning comes from FastAPI/Starlette's `TestClient` integration, not from EduRAG application code. Track the upstream FastAPI/Starlette dependency update rather than suppressing it globally.
+
+### Use module-qualified Python commands
+
+Use `python -m pytest -q` and `python -m ruff check .` consistently. Bare `pytest` or `ruff` commands can resolve to a different Python environment through PATH and lead to missing packages or inconsistent test results.
+
+### pytest-asyncio configuration
+
+`pytest-asyncio` remains in the development dependencies, but `asyncio_mode` is intentionally not configured. ED-01 async tests must opt in explicitly with `@pytest.mark.asyncio`; do not assume automatic async test collection.
