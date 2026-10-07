@@ -1,0 +1,107 @@
+name: edurage
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    image: edurage-api:local
+    ports:
+      - "8000:8000"
+    environment:
+      EDURAGE_ENV: ${EDURAGE_ENV:-dev}
+      EDURAGE_LOG_LEVEL: ${EDURAGE_LOG_LEVEL:-INFO}
+      EDURAGE_API_HOST: ${EDURAGE_API_HOST:-0.0.0.0}
+      EDURAGE_API_PORT: ${EDURAGE_API_PORT:-8000}
+      EDURAGE_LLM_PROVIDER: ${EDURAGE_LLM_PROVIDER:-openai}
+      EDURAGE_LLM_API_KEY: ${EDURAGE_LLM_API_KEY:-replace-with-your-api-key}
+      EDURAGE_LLM_BASE_URL: ${EDURAGE_LLM_BASE_URL:-https://api.openai.com/v1}
+      EDURAGE_LLM_MODEL: ${EDURAGE_LLM_MODEL:-gpt-4o-mini}
+      EDURAGE_EMBEDDING_MODEL: ${EDURAGE_EMBEDDING_MODEL:-text-embedding-3-small}
+      EDURAGE_VECTOR_STORE: ${EDURAGE_VECTOR_STORE:-qdrant}
+      EDURAGE_QDRANT_URL: ${EDURAGE_QDRANT_URL:-http://qdrant:6333}
+      EDURAGE_POSTGRES_DSN: ${EDURAGE_POSTGRES_DSN:-postgresql+psycopg://edurage:edurage@postgres:5432/edurage}
+      EDURAGE_MINIO_ENDPOINT: ${EDURAGE_MINIO_ENDPOINT:-minio:9000}
+      EDURAGE_MINIO_BUCKET: ${EDURAGE_MINIO_BUCKET:-edurage-docs}
+      EDURAGE_MINIO_ACCESS_KEY: ${EDURAGE_MINIO_ACCESS_KEY:-replace-with-minio-access-key}
+      EDURAGE_MINIO_SECRET_KEY: ${EDURAGE_MINIO_SECRET_KEY:-replace-with-minio-secret-key}
+      EDURAGE_ALLOW_CLOUD_UPLOAD: ${EDURAGE_ALLOW_CLOUD_UPLOAD:-false}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health', timeout=5)"
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
+
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: edurage
+      POSTGRES_PASSWORD: edurage
+      POSTGRES_DB: edurage
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./docker/postgres/init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U edurage -d edurage
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
+  qdrant:
+    image: qdrant/qdrant:v1.12.5
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - qdrant_data:/qdrant/storage
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - bash -c 'exec 3<>/dev/tcp/127.0.0.1/6333'
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
+  minio:
+    image: minio/minio:RELEASE.2024-12-18T13-15-44Z
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${EDURAGE_MINIO_ACCESS_KEY:-replace-with-minio-access-key}
+      MINIO_ROOT_PASSWORD: ${EDURAGE_MINIO_SECRET_KEY:-replace-with-minio-secret-key}
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - curl -fsS http://127.0.0.1:9000/minio/health/live >/dev/null || exit 1
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  qdrant_data:
+  minio_data:

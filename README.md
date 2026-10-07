@@ -389,6 +389,138 @@ EduRAG 是一个面向高校实验教学的多课程多模态 RAG + Agent 平台
 
 ---
 
-**文档版本**：v1.0  
-**日期**：2026-09-21  
+## 目录结构
+
+当前仓库（ED-00 集成结果）的主要目录如下：
+
+```text
+EduRAG/
+├── .github/workflows/ci.yml
+├── configs/
+│   ├── app.yaml
+│   └── course_packs/comp_org.yaml
+├── docker/
+│   ├── .dockerignore
+│   ├── Dockerfile
+│   └── postgres/init.sql
+├── docs/development.md
+├── scripts/
+│   ├── dev.ps1
+│   └── dev.sh
+├── src/edurage/
+│   ├── api/v1/endpoints/health.py
+│   ├── api/v1/router.py
+│   ├── core/config.py
+│   ├── core/logging.py
+│   ├── courses/loader.py
+│   ├── courses/schema.py
+│   └── main.py
+├── tests/
+│   ├── conftest.py
+│   ├── test_config.py
+│   ├── test_course_pack.py
+│   ├── test_env_contract.py
+│   ├── test_health.py
+│   └── test_smoke_import.py
+├── .env.example
+├── docker-compose.yml
+├── pyproject.toml
+└── README.md
+```
+
+## 开发环境搭建
+
+要求 Python 3.11+；运行容器工作流时需要 Docker Desktop/Compose。
+
+PowerShell：
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+python -m pip install -e ".[dev]"
+Copy-Item .env.example .env
+```
+
+Linux/macOS：
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -e ".[dev]"
+cp .env.example .env
+```
+
+`.env.example` 中冻结的 17 个 `EDURAGE_*` 键是运行契约，不应改名或删除；生产环境必须替换其中的密钥占位值。开发与验收命令统一使用 `python -m pip`、`python -m pytest`、`python -m ruff`，避免 PATH 指向不同解释器。
+
+## 本地启动 / Docker Compose 启动
+
+本机启动：
+
+```powershell
+python -m uvicorn edurage.main:app --reload --host 127.0.0.1 --port 8000
+curl.exe http://127.0.0.1:8000/api/v1/health
+```
+
+健康检查返回的冻结契约是：
+
+```json
+{"status":"ok","service":"edurage","version":"0.0.1"}
+```
+
+Docker Compose 启动基础设施与 API：
+
+```powershell
+docker compose config
+docker compose up -d postgres qdrant minio
+docker compose up -d --build api
+docker compose ps
+docker compose logs --no-color --tail 30 postgres qdrant minio api
+docker compose down
+```
+
+API 依赖 healthy 的 PostgreSQL 和 Qdrant；MinIO 提供文档对象存储。默认端口为 API `8000`、PostgreSQL `5432`、Qdrant `6333/6334`、MinIO `9000/9001`。
+
+> MVP 阶段使用云端 LLM，与 §2.2 离线目标存在阶段性差异。
+
+## ED-00 验收结果
+
+验收日期：2026-09-22。集成分支：`codex/ed-00-05-integration`。总体结果：**PASS**。
+
+| 验收项 | 命令/检查 | 结果 |
+| --- | --- | --- |
+| 开发依赖安装 | `python -m pip install -e ".[dev]"` | 通过，edurage 0.0.1 可编辑安装成功 |
+| 静态检查 | `python -m ruff check .` | 通过，All checks passed |
+| 自动化测试 | `python -m pytest -q` | 通过，8 passed；1 条 Starlette/httpx 第三方弃用警告 |
+| Compose 配置 | `docker compose config` | 通过，服务、端口、健康检查和卷配置解析成功 |
+| 真实进程健康检查 | `python -m uvicorn edurage.main:app` 后请求 `/api/v1/health` | 通过，返回冻结契约 JSON |
+| 基础设施容器 | `docker compose up -d postgres qdrant minio` | 通过，三容器均为 healthy |
+| API 容器（加分项） | `docker compose up -d --build api` | 通过，API 容器 healthy 且健康检查契约通过 |
+
+容器日志摘要：PostgreSQL 完成扩展、schema、表初始化并通过 `pg_isready`；Qdrant 1.12.5 启动 REST 6333 与 gRPC 6334；MinIO 启动对象存储 API 9000 与控制台 9001；API 容器使用 uvicorn 启动并响应健康检查。
+
+## ED-01 MVP 验收标准（上传 PDF → 提问 → 引用到页 → pytest 全绿）
+
+ED-01 必须满足以下端到端链路，且不得改变 ED-00 冻结契约：
+
+1. **上传 PDF**：调用 `POST /api/v1/upload` 上传一份计算机组成原理 PDF，使用课程包 `CS-COMP-ORG`；响应必须返回可追踪的 `document_id`，并在存储中保留源文件与页面元数据。
+2. **提问**：调用 `POST /api/v1/query`，提出答案明确存在于该 PDF 中的问题；请求指定 `course_pack` 和可选 `document_ids`，响应必须在可接受时限内返回答案。
+3. **引用到页**：回答必须包含非空的结构化引用，每条引用至少包含 `document_id`、文件名、页码、片段文本/位置和相关性分数；页码必须与 PDF 实际页一致，不能只返回整篇文档级引用。
+4. **全量回归**：`python -m pytest -q` 必须全绿；至少覆盖上传、查询、页级引用和错误路径，并保留 ED-00 的健康检查、环境契约、课程包契约回归测试。
+5. **验收命令**：
+
+```powershell
+python -m pip install -e ".[dev]"
+python -m ruff check .
+python -m pytest -q
+docker compose config
+```
+
+ED-01 可使用云端 LLM 完成 MVP 链路，但必须显式配置密钥并遵守数据上传策略；将模型切换为本地/离线推理属于与 §2.2 离线目标对齐的后续工作。
+
+---
+
+**文档版本**：v1.1（ED-00 集成）
+**日期**：2026-09-22
 **作者**：EduRAG 项目组
