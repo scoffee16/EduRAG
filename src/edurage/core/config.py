@@ -31,6 +31,15 @@ class Settings(BaseSettings):
     minio_access_key: str = "minioadmin"
     minio_secret_key: str = "minioadmin"
     allow_cloud_upload: bool = False
+    embedding_dim: int = 1024
+    embedding_batch_size: int = 10
+    qdrant_collection: str = "edurage_chunks"
+    chunk_size: int = 500
+    chunk_overlap: int = 80
+    upload_max_mb: int = 20
+    top_k: int = 5
+    llm_temperature: float = 0.1
+    llm_timeout_s: int = 60
 
 
 @lru_cache

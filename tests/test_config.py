@@ -22,6 +22,15 @@ DEFAULT_SETTINGS = {
     "minio_access_key": "minioadmin",
     "minio_secret_key": "minioadmin",
     "allow_cloud_upload": False,
+    "embedding_dim": 1024,
+    "embedding_batch_size": 10,
+    "qdrant_collection": "edurage_chunks",
+    "chunk_size": 500,
+    "chunk_overlap": 80,
+    "upload_max_mb": 20,
+    "top_k": 5,
+    "llm_temperature": 0.1,
+    "llm_timeout_s": 60,
 }
 
 
@@ -52,3 +61,17 @@ def test_settings_environment_overrides_are_coerced(
     assert isinstance(settings.api_port, int)
     assert settings.allow_cloud_upload is True
     assert isinstance(settings.allow_cloud_upload, bool)
+
+
+def test_ed01_settings_defaults() -> None:
+    settings = Settings(_env_file=None)
+
+    assert settings.embedding_dim == 1024
+    assert settings.embedding_batch_size == 10
+    assert settings.qdrant_collection == "edurage_chunks"
+    assert settings.chunk_size == 500
+    assert settings.chunk_overlap == 80
+    assert settings.upload_max_mb == 20
+    assert settings.top_k == 5
+    assert settings.llm_temperature == 0.1
+    assert settings.llm_timeout_s == 60

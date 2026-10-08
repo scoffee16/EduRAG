@@ -27,3 +27,12 @@ def configs_dir(project_root: Path) -> Path:
     """Return the repository's configuration directory."""
 
     return project_root / "configs"
+
+
+@pytest.fixture
+def sample_pdf_path(tmp_path: Path) -> Path:
+    """Create and return the deterministic sample PDF path."""
+
+    from tests.fixtures.sample_pdf import make_sample_pdf
+
+    return make_sample_pdf(tmp_path / "sample.pdf")
