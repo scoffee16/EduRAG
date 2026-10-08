@@ -11,6 +11,7 @@ from edurage.core.config import Settings, get_settings
 
 T = TypeVar("T")
 _client_override: OpenAI | None = None
+_embedding_client_override: OpenAI | None = None
 
 
 def _retryable_error(error: BaseException) -> bool:
@@ -27,6 +28,13 @@ def set_llm_client_for_testing(client: OpenAI | None) -> None:
     _client_override = client
 
 
+def set_embedding_client_for_testing(client: OpenAI | None) -> None:
+    """Set or clear an embedding client override for tests."""
+
+    global _embedding_client_override
+    _embedding_client_override = client
+
+
 def get_llm_client(settings: Settings | None = None) -> OpenAI:
     """Return an OpenAI client configured from application settings."""
 
@@ -36,6 +44,20 @@ def get_llm_client(settings: Settings | None = None) -> OpenAI:
     return OpenAI(
         api_key=settings.llm_api_key,
         base_url=settings.llm_base_url,
+        timeout=settings.llm_timeout_s,
+        max_retries=0,
+    )
+
+
+def get_embedding_client(settings: Settings | None = None) -> OpenAI:
+    """Return an OpenAI-compatible client configured for embedding calls."""
+
+    if _embedding_client_override is not None:
+        return _embedding_client_override
+    settings = settings or get_settings()
+    return OpenAI(
+        api_key=settings.embedding_api_key,
+        base_url=settings.embedding_base_url,
         timeout=settings.llm_timeout_s,
         max_retries=0,
     )

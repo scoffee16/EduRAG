@@ -4,13 +4,15 @@ from __future__ import annotations
 
 import hashlib
 import math
-import os
 import struct
 from collections.abc import Sequence
 from typing import Any, Protocol, runtime_checkable
 
-EMBEDDING_DIMENSIONS = 1024
+from edurage.core.config import Settings, get_settings
+from edurage.llm.client import get_embedding_client
+
 MAX_EMBEDDING_BATCH_SIZE = 10
+EMBEDDING_DIMENSIONS = 1024
 
 
 @runtime_checkable
@@ -27,35 +29,30 @@ class EmbeddingClient(Protocol):
     embeddings: Any
 
 
-def _configured_batch_size() -> int:
-    raw_size = os.getenv("EDURAGE_EMBEDDING_BATCH_SIZE", str(MAX_EMBEDDING_BATCH_SIZE))
-    try:
-        requested_size = int(raw_size)
-    except ValueError as exc:
-        raise ValueError("EDURAGE_EMBEDDING_BATCH_SIZE must be an integer") from exc
-    if requested_size < 1:
-        raise ValueError("EDURAGE_EMBEDDING_BATCH_SIZE must be at least 1")
-    return min(requested_size, MAX_EMBEDDING_BATCH_SIZE)
-
-
 class OpenAIEmbedder:
     """OpenAI-compatible embedder using the project's injected LLM API client."""
 
     def __init__(
         self,
-        client: EmbeddingClient,
-        model: str,
+        client: EmbeddingClient | None = None,
+        model: str | None = None,
         *,
+        settings: Settings | None = None,
+        dimensions: int | None = None,
         batch_size: int | None = None,
     ) -> None:
-        self.client = client
-        self.model = model
-        selected_batch_size = (
-            _configured_batch_size() if batch_size is None else min(batch_size, 10)
+        settings = settings or get_settings()
+        self.client = client or get_embedding_client(settings)
+        self.model = model or settings.embedding_model
+        self.dimensions = dimensions or settings.embedding_dim
+        self.batch_size = min(
+            batch_size or settings.embedding_batch_size,
+            MAX_EMBEDDING_BATCH_SIZE,
         )
-        self.batch_size = selected_batch_size
         if self.batch_size < 1:
             raise ValueError("batch_size must be at least 1")
+        if self.dimensions < 1:
+            raise ValueError("dimensions must be at least 1")
 
     def embed(self, texts: Sequence[str]) -> list[list[float]]:
         """Embed inputs in API calls of at most ten strings."""
@@ -66,7 +63,7 @@ class OpenAIEmbedder:
             response = self.client.embeddings.create(
                 model=self.model,
                 input=batch,
-                dimensions=EMBEDDING_DIMENSIONS,
+                dimensions=self.dimensions,
             )
             data = list(response.data)
             if len(data) != len(batch):
@@ -76,9 +73,9 @@ class OpenAIEmbedder:
                 data.sort(key=lambda item: item.index)
             for item in data:
                 vector = list(item.embedding)
-                if len(vector) != EMBEDDING_DIMENSIONS:
+                if len(vector) != self.dimensions:
                     raise ValueError(
-                        f"Expected {EMBEDDING_DIMENSIONS} embedding dimensions, "
+                        f"Expected {self.dimensions} embedding dimensions, "
                         f"received {len(vector)}"
                     )
                 results.append([float(value) for value in vector])
@@ -88,7 +85,10 @@ class OpenAIEmbedder:
 class HashingEmbedder:
     """Deterministic, dependency-free embedder for offline development and tests."""
 
-    dimensions = EMBEDDING_DIMENSIONS
+    def __init__(self, dimensions: int = EMBEDDING_DIMENSIONS) -> None:
+        if dimensions < 1:
+            raise ValueError("dimensions must be at least 1")
+        self.dimensions = dimensions
 
     def embed(self, texts: Sequence[str]) -> list[list[float]]:
         vectors: list[list[float]] = []

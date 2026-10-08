@@ -6,6 +6,7 @@ import argparse
 from collections import Counter
 from pathlib import Path
 
+from edurage.core.config import get_settings
 from edurage.ingest.chunker import chunk_pages
 from edurage.ingest.embedder import HashingEmbedder
 from edurage.ingest.pdf_parser import parse_pdf
@@ -23,9 +24,16 @@ def main() -> int:
     args = parser.parse_args()
 
     pages = parse_pdf(args.pdf)
-    chunks = chunk_pages(pages)
+    settings = get_settings()
+    chunks = chunk_pages(
+        pages,
+        chunk_size=settings.chunk_size,
+        overlap=settings.chunk_overlap,
+    )
     if args.dry_run:
-        vectors = HashingEmbedder().embed([chunk["text"] for chunk in chunks])
+        vectors = HashingEmbedder(settings.embedding_dim).embed(
+            [chunk["text"] for chunk in chunks]
+        )
         if len(vectors) != len(chunks):
             raise RuntimeError("Offline embedder returned an inconsistent number of vectors")
     else:
@@ -38,8 +46,11 @@ def main() -> int:
     print(f"course_code={args.course_code}")
     print(f"pages={len(pages)}")
     print(f"chunks={len(chunks)}")
-    print("page_distribution=" + ", ".join(f"page={page}:{count}" for page, count in sorted(distribution.items())))
-    print("embedding=hashing dimensions=1024")
+    distribution_text = ", ".join(
+        f"page={page}:{count}" for page, count in sorted(distribution.items())
+    )
+    print(f"page_distribution={distribution_text}")
+    print(f"embedding=hashing dimensions={settings.embedding_dim}")
     return 0
 
 
