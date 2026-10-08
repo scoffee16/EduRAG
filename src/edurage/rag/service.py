@@ -57,7 +57,7 @@ def answer_question(
             from edurage.core.config import get_settings
 
             settings = get_settings()
-        resolved_model = getattr(settings, "llm_model", "qwen-plus")
+        resolved_model = settings.llm_model
     return {
         "answer": answer,
         "citations": citations,

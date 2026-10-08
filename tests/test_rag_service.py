@@ -12,7 +12,7 @@ class FakeRetriever:
 
 
 class FakeLLM:
-    settings = type("Settings", (), {"llm_model": "qwen-plus"})()
+    settings = type("Settings", (), {"llm_model": "deepseek-chat"})()
 
     def __init__(self):
         self.calls = []
@@ -30,7 +30,7 @@ def test_service_returns_refusal_without_hits() -> None:
 
     assert result["answer"] == "根据现有资料无法确定"
     assert result["citations"] == []
-    assert result["model"] == "qwen-plus"
+    assert result["model"] == "deepseek-chat"
     assert llm.calls == []
 
 

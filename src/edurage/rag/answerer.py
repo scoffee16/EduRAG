@@ -5,6 +5,8 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any, Protocol
 
+from edurage.core.config import Settings, get_settings
+from edurage.llm.client import create_chat_completion, get_llm_client
 from edurage.rag.prompt import SYSTEM_PROMPT, build_user_prompt
 
 
@@ -34,23 +36,18 @@ def _message_content(response: Any) -> str:
 class Answerer:
     """Call the configured OpenAI-compatible chat completion client."""
 
-    def __init__(self, client: LLMClient, settings: Any | None = None) -> None:
-        self.client = client
-        self.settings = settings
-
-    def _value(self, name: str, default: Any) -> Any:
-        if self.settings is not None:
-            return getattr(self.settings, name, default)
-        from edurage.core.config import get_settings
-
-        return getattr(get_settings(), name, default)
+    def __init__(
+        self,
+        client: LLMClient | None = None,
+        settings: Settings | None = None,
+    ) -> None:
+        self.settings = settings or get_settings()
+        self.client = client or get_llm_client(self.settings)
 
     def answer(self, question: str, hits: list[Mapping[str, Any]]) -> str:
-        completions: ChatCompletions = self.client.chat.completions
-        response = completions.create(
-            model=self._value("llm_model", "qwen-plus"),
-            temperature=float(self._value("llm_temperature", 0.2)),
-            timeout=float(self._value("llm_timeout_s", 30.0)),
+        response = create_chat_completion(
+            self.client,
+            model=self.settings.llm_model,
             messages=[
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": build_user_prompt(question, hits)},
