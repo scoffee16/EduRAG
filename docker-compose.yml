@@ -13,11 +13,14 @@ services:
       EDURAGE_LOG_LEVEL: ${EDURAGE_LOG_LEVEL:-INFO}
       EDURAGE_API_HOST: ${EDURAGE_API_HOST:-0.0.0.0}
       EDURAGE_API_PORT: ${EDURAGE_API_PORT:-8000}
-      EDURAGE_LLM_PROVIDER: ${EDURAGE_LLM_PROVIDER:-openai}
-      EDURAGE_LLM_API_KEY: ${EDURAGE_LLM_API_KEY:-replace-with-your-api-key}
-      EDURAGE_LLM_BASE_URL: ${EDURAGE_LLM_BASE_URL:-https://api.openai.com/v1}
-      EDURAGE_LLM_MODEL: ${EDURAGE_LLM_MODEL:-gpt-4o-mini}
-      EDURAGE_EMBEDDING_MODEL: ${EDURAGE_EMBEDDING_MODEL:-text-embedding-3-small}
+      EDURAGE_LLM_PROVIDER: ${EDURAGE_LLM_PROVIDER:-deepseek}
+      EDURAGE_LLM_API_KEY: ${EDURAGE_LLM_API_KEY:-replace-with-your-deepseek-api-key}
+      EDURAGE_LLM_BASE_URL: ${EDURAGE_LLM_BASE_URL:-https://api.deepseek.com}
+      EDURAGE_LLM_MODEL: ${EDURAGE_LLM_MODEL:-deepseek-chat}
+      EDURAGE_EMBEDDING_PROVIDER: ${EDURAGE_EMBEDDING_PROVIDER:-dashscope}
+      EDURAGE_EMBEDDING_BASE_URL: ${EDURAGE_EMBEDDING_BASE_URL:-https://dashscope.aliyuncs.com/compatible-mode/v1}
+      EDURAGE_EMBEDDING_API_KEY: ${EDURAGE_EMBEDDING_API_KEY:-replace-with-your-dashscope-api-key}
+      EDURAGE_EMBEDDING_MODEL: ${EDURAGE_EMBEDDING_MODEL:-text-embedding-v3}
       EDURAGE_VECTOR_STORE: ${EDURAGE_VECTOR_STORE:-qdrant}
       EDURAGE_QDRANT_URL: ${EDURAGE_QDRANT_URL:-http://qdrant:6333}
       EDURAGE_POSTGRES_DSN: ${EDURAGE_POSTGRES_DSN:-postgresql+psycopg://edurage:edurage@postgres:5432/edurage}

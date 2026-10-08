@@ -9,11 +9,14 @@ DEFAULT_SETTINGS = {
     "log_level": "INFO",
     "api_host": "0.0.0.0",
     "api_port": 8000,
-    "llm_provider": "openai",
-    "llm_api_key": "sk-xxxx",
-    "llm_base_url": "https://api.openai.com/v1",
-    "llm_model": "gpt-4o-mini",
-    "embedding_model": "text-embedding-3-small",
+    "llm_provider": "deepseek",
+    "llm_api_key": "replace-with-your-deepseek-api-key",
+    "llm_base_url": "https://api.deepseek.com",
+    "llm_model": "deepseek-chat",
+    "embedding_provider": "dashscope",
+    "embedding_base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    "embedding_api_key": "replace-with-your-dashscope-api-key",
+    "embedding_model": "text-embedding-v3",
     "vector_store": "qdrant",
     "qdrant_url": "http://qdrant:6333",
     "postgres_dsn": "postgresql+psycopg://edurage:edurage@postgres:5432/edurage",
@@ -54,6 +57,9 @@ def test_settings_environment_overrides_are_coerced(
     _clear_edurage_environment(monkeypatch)
     monkeypatch.setenv("EDURAGE_API_PORT", "9123")
     monkeypatch.setenv("EDURAGE_ALLOW_CLOUD_UPLOAD", "true")
+    monkeypatch.setenv("EDURAGE_LLM_PROVIDER", "deepseek")
+    monkeypatch.setenv("EDURAGE_EMBEDDING_PROVIDER", "dashscope")
+    monkeypatch.setenv("EDURAGE_EMBEDDING_DIM", "1536")
 
     settings = Settings(_env_file=None)
 
@@ -61,6 +67,10 @@ def test_settings_environment_overrides_are_coerced(
     assert isinstance(settings.api_port, int)
     assert settings.allow_cloud_upload is True
     assert isinstance(settings.allow_cloud_upload, bool)
+    assert settings.llm_provider == "deepseek"
+    assert settings.embedding_provider == "dashscope"
+    assert settings.embedding_dim == 1536
+    assert isinstance(settings.embedding_dim, int)
 
 
 def test_ed01_settings_defaults() -> None:

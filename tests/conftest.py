@@ -1,5 +1,6 @@
 from collections.abc import Iterator
 from pathlib import Path
+from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
@@ -27,6 +28,23 @@ def configs_dir(project_root: Path) -> Path:
     """Return the repository's configuration directory."""
 
     return project_root / "configs"
+
+
+@pytest.fixture
+def tmp_path(project_root: Path) -> Iterator[Path]:
+    """Provide a workspace-local temporary directory on restricted hosts."""
+
+    path = project_root / ".tmp" / f"pytest-{uuid4().hex}"
+    path.mkdir(parents=True, exist_ok=False)
+    try:
+        yield path
+    finally:
+        for child in sorted(path.rglob("*"), reverse=True):
+            if child.is_file() or child.is_symlink():
+                child.unlink(missing_ok=True)
+            elif child.is_dir():
+                child.rmdir()
+        path.rmdir()
 
 
 @pytest.fixture
