@@ -16,6 +16,14 @@ dependencies = [
     "pyyaml",
     "httpx",
     "python-dotenv",
+    "pymupdf",
+    "openai>=1.40",
+    "qdrant-client",
+    "minio",
+    "sqlalchemy>=2",
+    "psycopg[binary]",
+    "python-multipart",
+    "tenacity",
 ]
 
 [project.optional-dependencies]
@@ -26,6 +34,7 @@ dev = [
     "ruff",
     "mypy",
     "pre-commit",
+    "respx",
 ]
 
 [tool.setuptools.packages.find]
@@ -38,3 +47,7 @@ target-version = "py311"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
+asyncio_mode = "auto"
+markers = [
+    "integration: requires running external services",
+]
