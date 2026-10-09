@@ -18,7 +18,8 @@ def make_sample_pdf(path: Path) -> Path:
         ),
         (
             "EduRAG sample PDF page 2.\nDocument processing uses page-aware citations.\n"
-            "The key sentence is: deterministic sample content for testing."
+            "The key sentence is: deterministic sample content for testing.\n"
+            "ADD 指令的微地址序列是取指、译码、执行。"
         ),
         (
             "EduRAG sample PDF page 3.\nChunk metadata includes the source page number.\n"
