@@ -521,6 +521,84 @@ ED-01 可使用云端 LLM 完成 MVP 链路，但必须显式配置密钥并遵�
 
 ---
 
+## ED-01 MVP 使用说明
+
+ED-01 当前提供 PDF 上传、按页解析、向量检索和带页码引用的问答 API。服务启动后，健康检查地址为 `GET /api/v1/health`。
+
+### DeepSeek / DashScope 配置
+
+复制 `.env.example` 为 `.env`，填入真实密钥；`.env` 不得提交到 Git：
+
+```dotenv
+EDURAGE_LLM_PROVIDER=deepseek
+EDURAGE_LLM_BASE_URL=https://api.deepseek.com
+EDURAGE_LLM_MODEL=deepseek-chat
+EDURAGE_LLM_API_KEY=<DEEPSEEK_API_KEY>
+
+EDURAGE_EMBEDDING_PROVIDER=dashscope
+EDURAGE_EMBEDDING_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
+EDURAGE_EMBEDDING_MODEL=text-embedding-v3
+EDURAGE_EMBEDDING_API_KEY=<DASHSCOPE_API_KEY>
+```
+
+`deepseek-chat` 和 `text-embedding-v3` 是当前配置契约；不要替换为 `gpt-4o-mini` 或 `qwen-plus`。上传云端前请确认资料策略，默认 `EDURAGE_ALLOW_CLOUD_UPLOAD=false`。
+
+### 上传 PDF
+
+启用上传后，使用课程包代码 `CS-COMP-ORG`：
+
+```powershell
+curl.exe -X POST http://127.0.0.1:8000/api/v1/upload `
+  -F "file=@sample.pdf;type=application/pdf" `
+  -F "course_code=CS-COMP-ORG"
+```
+
+响应包含 `document_id`、页数、分块数和索引状态：
+
+```json
+{
+  "document_id": "00000000-0000-0000-0000-000000000000",
+  "filename": "sample.pdf",
+  "pages": 3,
+  "chunks": 3,
+  "course_code": "CS-COMP-ORG",
+  "status": "indexed"
+}
+```
+
+### 提问并查看页码引用
+
+```powershell
+curl.exe -X POST http://127.0.0.1:8000/api/v1/query `
+  -H "Content-Type: application/json" `
+  -d '{ "question": "ADD 指令的微地址序列是什么？", "course_code": "CS-COMP-ORG", "top_k": 5 }'
+```
+
+响应的 `citations` 数组包含 `document_id`、`filename`、`page`、`snippet`、`score` 和 `modality`；ED-01 验收要求该问题的离线样例响应包含 `page: 2`。
+
+### ED-01-05 验收结果
+
+验收日期：2026-10-10。分支：`codex/ed-01-05-integration`。
+
+| 验收项 | 结果 |
+| --- | --- |
+| `python -m ruff check .` | 通过，All checks passed |
+| `docker compose config` | 通过 |
+| `$env:TEMP='.tmp'; $env:TMP='.tmp'; $env:TMPDIR='.tmp'; python -m pytest -q --basetemp .pytest-tmp` | 通过，36 passed, 1 skipped |
+| 离线 PDF 上传 → 查询 → `citations` 含 `page=2` | 通过，`tests/e2e/test_e2e_sample_pdf.py` |
+| Docker PostgreSQL/Qdrant/MinIO | partial：Docker Desktop Linux engine 不可用，named pipe `dockerDesktopLinuxEngine` 不存在 |
+| `scripts/init_db.py` / `scripts/init_qdrant.py` | 未执行：受上述 Docker 阻塞，未伪造结果 |
+| Live DeepSeek/DashScope 冒烟 | 未执行：本次验收未启用 `EDURAGE_LIVE_API_TESTS=1`，不打印或暴露 Key |
+
+容器验收恢复后，执行：
+
+```powershell
+docker compose up -d postgres qdrant minio
+python scripts/init_db.py
+python scripts/init_qdrant.py
+docker compose ps
+```
+
 **文档版本**：v1.1（ED-00 集成）
-**日期**：2026-09-22
+**日期**：2026-10-10
 **作者**：EduRAG 项目组
