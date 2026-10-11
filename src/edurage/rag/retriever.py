@@ -11,6 +11,9 @@ from edurage.core.config import get_settings
 class Embedder(Protocol):
     """Minimal embedding interface supplied by the embedding subsystem."""
 
+    def embed(self, texts: list[str]) -> list[list[float]]:
+        """Return one vector for each input text."""
+
     def embed_query(self, text: str) -> list[float]:
         """Return one embedding vector for a query."""
 
@@ -38,11 +41,20 @@ def _point_to_hit(point: Any) -> dict[str, Any]:
 
 
 def _embed_query(embedder: Embedder, question: str) -> list[float]:
-    method = getattr(embedder, "embed_query", None) or embedder.embed
-    vector = method(question)
+    method = getattr(embedder, "embed_query", None)
+    if method is not None:
+        vector = method(question)
+    else:
+        vector = embedder.embed([question])[0]
     if hasattr(vector, "tolist"):
         vector = vector.tolist()
-    return list(vector)
+    vector = list(vector)
+    dimensions = int(_setting("embedding_dim", 1024))
+    if len(vector) != dimensions or any(isinstance(value, (list, tuple)) for value in vector):
+        raise ValueError(
+            f"Query embedding must be a one-dimensional vector of length {dimensions}"
+        )
+    return [float(value) for value in vector]
 
 
 def _search(client: QdrantClient, kwargs: dict[str, Any]) -> Any:

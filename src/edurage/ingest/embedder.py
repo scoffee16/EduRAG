@@ -81,6 +81,11 @@ class OpenAIEmbedder:
                 results.append([float(value) for value in vector])
         return results
 
+    def embed_query(self, text: str) -> list[float]:
+        """Embed one query string as a single vector."""
+
+        return self.embed([text])[0]
+
 
 class HashingEmbedder:
     """Deterministic, dependency-free embedder for offline development and tests."""
@@ -101,3 +106,8 @@ class HashingEmbedder:
             norm = math.sqrt(sum(value * value for value in vector))
             vectors.append([value / norm for value in vector])
         return vectors
+
+    def embed_query(self, text: str) -> list[float]:
+        """Embed one query string as a single vector."""
+
+        return self.embed([text])[0]
