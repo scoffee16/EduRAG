@@ -43,6 +43,7 @@ def test_retriever_embeds_and_filters_by_course() -> None:
     assert all(isinstance(value, float) for value in client.kwargs["query_vector"])
     assert client.kwargs["limit"] == 7
     assert client.kwargs["query_filter"]["must"][0]["key"] == "course_code"
+    assert all(isinstance(hit["payload"]["page"], int) for hit in hits)
 
 
 class LegacyEmbedder:

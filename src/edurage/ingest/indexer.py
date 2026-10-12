@@ -127,6 +127,7 @@ class IngestIndexer:
                 payload = {
                     "document_id": document_id,
                     "course_code": course_code,
+                    "filename": pdf_path.name,
                     "page": chunk["page"],
                     "chunk_index": chunk["chunk_index"],
                     "modality": chunk["modality"],

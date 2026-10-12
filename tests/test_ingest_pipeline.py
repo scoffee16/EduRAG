@@ -103,6 +103,7 @@ def test_pipeline_propagates_pages_and_persists_all_document_assets(tmp_path: Pa
     assert result["pages"] == 2
     assert result["chunks"] == len(vectors.points) == len(repository.chunks)
     assert {point["payload"]["page"] for point in vectors.points} == {1, 2}
+    assert {point["payload"]["filename"] for point in vectors.points} == {"sample.pdf"}
     assert [chunk["metadata"]["chunk_index"] for chunk in repository.chunks] == list(
         range(result["chunks"])
     )
@@ -239,6 +240,9 @@ def test_real_qdrant_persists_exact_page_payload(tmp_path: Path) -> None:
         response.raise_for_status()
         stored_points = response.json()["result"]["points"]
         assert {point["payload"]["page"] for point in stored_points} == {1, 2}
+        assert {point["payload"]["filename"] for point in stored_points} == {
+            "qdrant-integration.pdf"
+        }
         assert repository.documents[result["document_id"]]["status"] == "indexed"
     finally:
         client.close()
