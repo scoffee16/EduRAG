@@ -18,11 +18,14 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     api_host: str = "0.0.0.0"
     api_port: int = 8000
-    llm_provider: str = "openai"
-    llm_api_key: str = "sk-xxxx"
-    llm_base_url: str = "https://api.openai.com/v1"
-    llm_model: str = "gpt-4o-mini"
-    embedding_model: str = "text-embedding-3-small"
+    llm_provider: str = "deepseek"
+    llm_api_key: str = "replace-with-your-deepseek-api-key"
+    llm_base_url: str = "https://api.deepseek.com"
+    llm_model: str = "deepseek-chat"
+    embedding_provider: str = "dashscope"
+    embedding_base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    embedding_api_key: str = "replace-with-your-dashscope-api-key"
+    embedding_model: str = "text-embedding-v3"
     vector_store: str = "qdrant"
     qdrant_url: str = "http://qdrant:6333"
     postgres_dsn: str = "postgresql+psycopg://edurage:edurage@postgres:5432/edurage"
@@ -31,6 +34,15 @@ class Settings(BaseSettings):
     minio_access_key: str = "minioadmin"
     minio_secret_key: str = "minioadmin"
     allow_cloud_upload: bool = False
+    embedding_dim: int = 1024
+    embedding_batch_size: int = 10
+    qdrant_collection: str = "edurage_chunks"
+    chunk_size: int = 500
+    chunk_overlap: int = 80
+    upload_max_mb: int = 20
+    top_k: int = 5
+    llm_temperature: float = 0.1
+    llm_timeout_s: int = 60
 
 
 @lru_cache

@@ -32,6 +32,8 @@ huggingface/
 .pytest_cache/
 .ruff_cache/
 .mypy_cache/
+.tmp/
+.pytest-tmp/
 .coverage
 .coverage.*
 htmlcov/
