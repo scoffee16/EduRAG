@@ -19,12 +19,16 @@ from edurage.core.config import Settings, get_settings
 from edurage.db.engine import get_session_factory
 from edurage.db.models import Chunk, CoursePack, Document
 from edurage.ingest.chunker import chunk_pages
+from edurage.ingest.document_parser import detect_file_type, parse_document
 from edurage.ingest.embedder import Embedder, OpenAIEmbedder
-from edurage.ingest.pdf_parser import parse_pdf
 from edurage.storage.minio_client import get_minio_client
 from edurage.vector.qdrant_client import get_qdrant_client
 
 COLLECTION_NAME = "edurage_chunks"
+CONTENT_TYPES = {
+    "pdf": "application/pdf",
+    "pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+}
 
 
 class VectorStore(Protocol):
@@ -82,8 +86,32 @@ class IngestIndexer:
     def ingest_pdf(self, path: str | Path, course_code: str) -> dict[str, Any]:
         """Parse, chunk, embed, and persist a PDF, compensating partial writes on error."""
 
-        pdf_path = Path(path)
-        pages = parse_pdf(pdf_path)
+        return self._ingest_document(path, course_code, expected_file_type="pdf")
+
+    def ingest_pptx(self, path: str | Path, course_code: str) -> dict[str, Any]:
+        """Parse, chunk, embed, and persist a PPTX deck."""
+
+        return self._ingest_document(path, course_code, expected_file_type="pptx")
+
+    def ingest_document(self, path: str | Path, course_code: str) -> dict[str, Any]:
+        """Parse, chunk, embed, and persist a supported document."""
+
+        return self._ingest_document(path, course_code, expected_file_type=None)
+
+    def _ingest_document(
+        self,
+        path: str | Path,
+        course_code: str,
+        *,
+        expected_file_type: str | None,
+    ) -> dict[str, Any]:
+        document_path = Path(path)
+        file_type = detect_file_type(document_path)
+        if expected_file_type is not None and file_type != expected_file_type:
+            expected = expected_file_type.upper()
+            raise ValueError(f"Expected a {expected} file, got: {document_path}")
+
+        pages = parse_document(document_path)
         chunks = chunk_pages(
             pages,
             chunk_size=self.settings.chunk_size,
@@ -100,14 +128,18 @@ class IngestIndexer:
                 )
 
         document_id = str(uuid.uuid4())
-        object_key = f"{course_code}/{document_id}/{pdf_path.name}"
+        object_key = f"{course_code}/{document_id}/{document_path.name}"
         object_written = False
         vectors_written = False
         relational_started = False
         point_ids: list[str] = []
 
         try:
-            self.object_store.put(object_key, pdf_path.read_bytes(), "application/pdf")
+            self.object_store.put(
+                object_key,
+                document_path.read_bytes(),
+                CONTENT_TYPES[file_type],
+            )
             object_written = True
             self.vector_store.ensure_collection(
                 self.collection_name,
@@ -127,11 +159,12 @@ class IngestIndexer:
                 payload = {
                     "document_id": document_id,
                     "course_code": course_code,
-                    "filename": pdf_path.name,
+                    "filename": document_path.name,
                     "page": chunk["page"],
                     "chunk_index": chunk["chunk_index"],
                     "modality": chunk["modality"],
                     "text": chunk["text"],
+                    "file_type": file_type,
                 }
                 point_records.append(
                     {"id": point_id, "vector": vector, "payload": payload}
@@ -146,6 +179,7 @@ class IngestIndexer:
                         "metadata": {
                             "page": chunk["page"],
                             "chunk_index": chunk["chunk_index"],
+                            "file_type": file_type,
                         },
                     }
                 )
@@ -159,8 +193,8 @@ class IngestIndexer:
                 {
                     "id": document_id,
                     "course_code": course_code,
-                    "filename": pdf_path.name,
-                    "file_type": "pdf",
+                    "filename": document_path.name,
+                    "file_type": file_type,
                     "storage_path": object_key,
                     "metadata": {"pages": len(pages), "chunks": len(chunks)},
                     "status": "processing",
@@ -179,7 +213,12 @@ class IngestIndexer:
                 _best_effort(lambda: self.object_store.delete(object_key))
             raise
 
-        return {"document_id": document_id, "pages": len(pages), "chunks": len(chunks)}
+        return {
+            "document_id": document_id,
+            "file_type": file_type,
+            "pages": len(pages),
+            "chunks": len(chunks),
+        }
 
 
 class QdrantVectorStore:
@@ -280,7 +319,7 @@ class SqlAlchemyDocumentRepository:
 
 
 class MinioObjectStore:
-    """MinIO adapter for raw PDF persistence."""
+    """MinIO adapter for raw document persistence."""
 
     def __init__(self, client: Any, settings: Settings) -> None:
         self.client = client
