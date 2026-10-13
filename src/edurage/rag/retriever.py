@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from typing import Any, Protocol
 
 from qdrant_client.http import models as qdrant_models
@@ -65,13 +65,45 @@ def _embed_query(embedder: Embedder, question: str) -> list[float]:
         vector = embedder.embed([question])[0]
     if hasattr(vector, "tolist"):
         vector = vector.tolist()
-    vector = list(vector)
+    try:
+        vector = list(vector)
+    except TypeError as exc:
+        raise ValueError("Query embedding must be a one-dimensional vector") from exc
     dimensions = int(_setting("embedding_dim", 1024))
-    if len(vector) != dimensions or any(isinstance(value, (list, tuple)) for value in vector):
+    if len(vector) != dimensions or any(
+        isinstance(value, Iterable) and not isinstance(value, (str, bytes))
+        for value in vector
+    ):
         raise ValueError(
             f"Query embedding must be a one-dimensional vector of length {dimensions}"
         )
-    return [float(value) for value in vector]
+    try:
+        return [float(value) for value in vector]
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"Query embedding must be a one-dimensional vector of length {dimensions}"
+        ) from exc
+
+
+def _score(hit: Mapping[str, Any]) -> float:
+    try:
+        return float(hit.get("score", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _matches_scope(
+    hit: Mapping[str, Any],
+    *,
+    course_code: str | None,
+    document_id: str | None,
+) -> bool:
+    payload = hit.get("payload", {})
+    if not isinstance(payload, Mapping):
+        return False
+    if course_code is not None and payload.get("course_code") != course_code:
+        return False
+    return document_id is None or payload.get("document_id") == document_id
 
 
 def _search(client: QdrantClient, kwargs: dict[str, Any]) -> Any:
@@ -109,6 +141,8 @@ class Retriever:
         top_k: int | None = None,
         document_id: str | None = None,
     ) -> list[dict[str, Any]]:
+        if document_id is not None and course_code is None:
+            raise ValueError("course_code is required when document_id is provided")
         vector = _embed_query(self.embedder, question)
         limit = top_k or int(_setting("top_k", 5))
         kwargs: dict[str, Any] = {
@@ -118,14 +152,14 @@ class Retriever:
             "with_payload": True,
         }
         conditions = []
-        if course_code:
+        if course_code is not None:
             conditions.append(
                 qdrant_models.FieldCondition(
                     key="course_code",
                     match=qdrant_models.MatchValue(value=course_code),
                 )
             )
-        if document_id:
+        if document_id is not None:
             conditions.append(
                 qdrant_models.FieldCondition(
                     key="document_id",
@@ -136,7 +170,17 @@ class Retriever:
             kwargs["query_filter"] = _CompatFilter(must=conditions)
         result = _search(self.client, kwargs)
         points = getattr(result, "points", result)
-        return [_point_to_hit(point) for point in (points or [])]
+        hits = [
+            hit
+            for point in (points or [])
+            if (hit := _point_to_hit(point))
+            and _matches_scope(
+                hit,
+                course_code=course_code,
+                document_id=document_id,
+            )
+        ]
+        return sorted(hits, key=_score, reverse=True)
 
     __call__ = retrieve
 

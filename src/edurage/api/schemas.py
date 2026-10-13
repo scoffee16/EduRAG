@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class UploadResponse(BaseModel):
@@ -19,6 +19,12 @@ class QueryRequest(BaseModel):
     course_code: str | None = "CS-COMP-ORG"
     document_id: str | None = None
     top_k: int | None = Field(default=None, ge=1)
+
+    @model_validator(mode="after")
+    def require_course_for_document(self) -> QueryRequest:
+        if self.document_id is not None and self.course_code is None:
+            raise ValueError("course_code is required when document_id is provided")
+        return self
 
 
 class DocumentSummary(BaseModel):
@@ -39,6 +45,7 @@ class Citation(BaseModel):
     snippet: str
     score: float | None = None
     modality: str | None = None
+    file_type: str | None = None
 
 
 class QueryResponse(BaseModel):
