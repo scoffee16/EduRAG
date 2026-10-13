@@ -602,3 +602,59 @@ docker compose ps
 **文档版本**：v1.1（ED-00 集成）
 **日期**：2026-10-10
 **作者**：EduRAG 项目组
+
+## ED-02 文档生命周期与 PDF/PPTX 检索
+
+ED-02 在 ED-01 的 PDF RAG MVP 上增加文档生命周期管理、PPTX 文本摄取和跨格式引用：
+
+- 支持 `.pdf` 和 `.pptx` 按页/slide 解析、分块、嵌入和检索；
+- PDF 引用中的 `page` 表示 PDF 页码，PPTX 引用中的 `page` 表示 slide 编号；
+- Qdrant payload 保留 `document_id`、`filename`、`file_type`、`page` 和 `chunk_index`；
+- `document_id` 可作为查询过滤条件，未指定时继续按 `course_code` 检索；
+- 当前不解析图片、音频、动画和嵌入对象。
+
+### ED-02 API
+
+`POST /api/v1/upload` 同时支持 PDF 和 PPTX，服务根据文件扩展名选择解析器：
+
+```powershell
+curl.exe -X POST http://127.0.0.1:8000/api/v1/upload `
+  -F "file=@sample.pdf;type=application/pdf" `
+  -F "course_code=CS-COMP-ORG"
+
+curl.exe -X POST http://127.0.0.1:8000/api/v1/upload `
+  -F "file=@sample.pptx;type=application/vnd.openxmlformats-officedocument.presentationml.presentation" `
+  -F "course_code=CS-COMP-ORG"
+```
+
+查询支持可选的 `document_id`：
+
+```powershell
+curl.exe -X POST http://127.0.0.1:8000/api/v1/query `
+  -H "Content-Type: application/json" `
+  -d '{ "question": "ADD 指令的微地址序列是什么？", "course_code": "CS-COMP-ORG", "document_id": "<DOCUMENT_ID>", "top_k": 5 }'
+```
+
+文档列表支持按课程过滤，删除接口只删除指定文档及其对象、向量和分块记录：
+
+```powershell
+curl.exe "http://127.0.0.1:8000/api/v1/documents?course_code=CS-COMP-ORG"
+curl.exe -X DELETE "http://127.0.0.1:8000/api/v1/documents/<DOCUMENT_ID>"
+```
+
+删除前应确认 `document_id`；不存在的文档返回 `404`，删除不会影响其它文档。真实资料、业务数据和包含敏感信息的文件不得提交 Git；云端 DeepSeek/DashScope Key 不得写入日志。
+
+### ED-02 验收结果
+
+验收日期：2026-10-13。集成分支：`codex/ed-02-04-integration`。总体结果：**PASS（离线集成验收）**。
+
+| 验收项 | 结果 |
+| --- | --- |
+| 三个 ED-02 分支按顺序集成 | 通过，无冲突 |
+| 开发依赖安装 | 通过，`python -m pip install -e ".[dev]"` |
+| 全量自动化测试 | 通过，`63 passed` |
+| Ruff / Compose / diff 检查 | 通过 |
+| 三页 PDF dry-run | 通过，页码 `[1,2,3]`、chunk 索引连续 |
+| 三 slide PPTX dry-run | 通过，slide `[1,2,3]`、chunk 索引连续 |
+| 文档列表、删除和 `document_id` 过滤 | 通过，离线测试覆盖 |
+| Docker、真实 DeepSeek/DashScope 调用 | 未执行；未伪造结果 |
