@@ -26,7 +26,12 @@ class FakeQdrant:
 
     def search(self, **kwargs):
         self.kwargs = kwargs
-        return [Point({"document_id": "doc-1", "page": 3}, 0.91)]
+        return [
+            Point(
+                {"document_id": "doc-1", "course_code": "comp-org", "page": 3},
+                0.91,
+            )
+        ]
 
 
 def test_retriever_embeds_and_filters_by_course() -> None:
@@ -36,7 +41,16 @@ def test_retriever_embeds_and_filters_by_course() -> None:
 
     hits = retriever.retrieve("什么是流水线？", course_code="comp-org", top_k=7)
 
-    assert hits == [{"payload": {"document_id": "doc-1", "page": 3}, "score": 0.91}]
+    assert hits == [
+        {
+            "payload": {
+                "document_id": "doc-1",
+                "course_code": "comp-org",
+                "page": 3,
+            },
+            "score": 0.91,
+        }
+    ]
     assert embedder.questions == ["什么是流水线？"]
     assert client.kwargs["query_vector"] == [0.1] * 1024
     assert len(client.kwargs["query_vector"]) == 1024

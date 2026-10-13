@@ -12,7 +12,7 @@ SYSTEM_PROMPT = f"""你是 EduRAG 的中文课程问答助手。
 1. 只依据用户提供的检索片段作答，不得使用片段之外的知识补全、猜测或编造。
 2. 如果检索片段没有足够依据，必须只回答“{NO_EVIDENCE_ANSWER}”。
 3. 回答中的每条事实都必须能在检索片段中找到依据。
-4. 需要引用时，引用必须使用检索片段提供的 page 页码，不得虚构或改写页码。
+4. 需要引用时，引用必须使用检索片段提供的 page 字段（PDF 页码或 PPTX slide 编号），不得虚构或改写。
 5. 回答简洁、准确，优先直接回答问题。"""
 
 
@@ -24,11 +24,12 @@ def _format_hit(hit: Mapping[str, Any], index: int) -> str:
     filename = payload.get("filename", "")
     page = payload.get("page", "")
     modality = payload.get("modality", "")
-    snippet = payload.get("snippet", payload.get("content", ""))
+    file_type = payload.get("file_type", "")
+    snippet = payload.get("snippet") or payload.get("text") or payload.get("content", "")
     score = hit.get("score", "")
     return (
         f"[片段 {index}] document_id={document_id}; filename={filename}; "
-        f"page={page}; modality={modality}; score={score}\n{snippet}"
+        f"file_type={file_type}; page={page}; modality={modality}; score={score}\n{snippet}"
     )
 
 

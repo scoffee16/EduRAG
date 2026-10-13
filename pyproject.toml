@@ -17,6 +17,7 @@ dependencies = [
     "httpx",
     "python-dotenv",
     "pymupdf",
+    "python-pptx",
     "openai>=1.40",
     "qdrant-client",
     "minio",

@@ -44,6 +44,7 @@ def test_service_injects_retriever_and_llm_and_preserves_citation_fields() -> No
                 "page": 12,
                 "snippet": "证据",
                 "modality": "text",
+                "file_type": "pdf",
             },
         }
     ]
@@ -61,6 +62,7 @@ def test_service_injects_retriever_and_llm_and_preserves_citation_fields() -> No
             "snippet": "证据",
             "score": 0.88,
             "modality": "text",
+            "file_type": "pdf",
         }
     ]
     assert retriever.calls == [("问题", "comp-org", 2)]
