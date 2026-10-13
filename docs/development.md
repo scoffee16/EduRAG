@@ -10,6 +10,8 @@
 
 The development scripts create a local `.venv`, install the package with development
 dependencies, and start the application with reload enabled.
+Runtime document parsing dependencies include PyMuPDF for PDF text extraction and
+python-pptx for lightweight PPTX slide text extraction.
 
 PowerShell:
 
@@ -122,9 +124,9 @@ contains both DeepSeek and DashScope keys. Never print those values. If either
 external call fails, record only the HTTP status and a short sanitized error
 summary. Do not turn a failed live call into a passing result.
 
-### Real PPT follow-up
+### Rich PPT follow-up
 
-The ED-01 MVP acceptance path is a generated three-page PDF. Real PPT/PPTX
-processing remains a follow-up: add a representative deck, preserve slide
-numbers and source metadata, validate text plus images/tables, and add an
-end-to-end test before claiming slide-level citation support.
+The ingestion pipeline supports lightweight PPTX text extraction for titles, text
+boxes, and tables while preserving slide numbers. Rich slide processing remains a
+follow-up: validate images, audio, animation, embedded objects, and representative
+real-world decks before claiming full slide-level multimedia support.

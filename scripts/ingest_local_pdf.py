@@ -1,15 +1,20 @@
-"""Offline PDF ingestion preview CLI."""
+"""Backward-compatible offline PDF ingestion preview CLI."""
 
 from __future__ import annotations
 
 import argparse
-from collections import Counter
+import sys
 from pathlib import Path
 
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(PROJECT_ROOT / "src"))
+
 from edurage.core.config import get_settings
-from edurage.ingest.chunker import chunk_pages
-from edurage.ingest.embedder import HashingEmbedder
-from edurage.ingest.pdf_parser import parse_pdf
+
+try:
+    from scripts.ingest_local_document import preview_document
+except ModuleNotFoundError:
+    from ingest_local_document import preview_document
 
 
 def main() -> int:
@@ -23,29 +28,20 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    pages = parse_pdf(args.pdf)
-    settings = get_settings()
-    chunks = chunk_pages(
-        pages,
-        chunk_size=settings.chunk_size,
-        overlap=settings.chunk_overlap,
-    )
-    if args.dry_run:
-        vectors = HashingEmbedder(settings.embedding_dim).embed(
-            [chunk["text"] for chunk in chunks]
-        )
-        if len(vectors) != len(chunks):
-            raise RuntimeError("Offline embedder returned an inconsistent number of vectors")
-    else:
+    if not args.dry_run:
         parser.error(
             "Service-backed CLI ingestion is not available until the ED-01 service adapters "
             "are integrated; use --dry-run for offline verification."
         )
 
-    distribution = Counter(chunk["page"] for chunk in chunks)
+    file_type, page_count, chunk_count, distribution = preview_document(args.pdf)
+    if file_type != "pdf":
+        parser.error(f"Expected a PDF file, got file_type={file_type}")
+    settings = get_settings()
     print(f"course_code={args.course_code}")
-    print(f"pages={len(pages)}")
-    print(f"chunks={len(chunks)}")
+    print("file_type=pdf")
+    print(f"pages={page_count}")
+    print(f"chunks={chunk_count}")
     distribution_text = ", ".join(
         f"page={page}:{count}" for page, count in sorted(distribution.items())
     )
