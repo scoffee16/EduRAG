@@ -14,8 +14,15 @@ def _payload(hit: Mapping[str, Any]) -> Mapping[str, Any]:
 
 
 def _snippet(payload: Mapping[str, Any]) -> str:
-    value = payload.get("snippet", payload.get("content", ""))
+    value = payload.get("snippet") or payload.get("text") or payload.get("content", "")
     return str(value)[:MAX_SNIPPET_LENGTH]
+
+
+def _score(hit: Mapping[str, Any]) -> float:
+    try:
+        return float(hit.get("score", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
 
 
 def build_citations(hits: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
@@ -23,7 +30,7 @@ def build_citations(hits: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
 
     ordered_hits = sorted(
         hits,
-        key=lambda hit: float(hit.get("score", 0.0) or 0.0),
+        key=_score,
         reverse=True,
     )
     citations: list[dict[str, Any]] = []
@@ -42,6 +49,7 @@ def build_citations(hits: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
                 "snippet": _snippet(payload),
                 "score": hit.get("score"),
                 "modality": payload.get("modality"),
+                "file_type": payload.get("file_type"),
             }
         )
     return citations

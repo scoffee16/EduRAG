@@ -13,6 +13,7 @@ def test_citations_sort_deduplicate_and_truncate() -> None:
                     "page": 2,
                     "snippet": "较低分重复页",
                     "modality": "text",
+                    "file_type": "pdf",
                 },
             },
             {
@@ -23,6 +24,7 @@ def test_citations_sort_deduplicate_and_truncate() -> None:
                     "page": 2,
                     "snippet": long_snippet,
                     "modality": "text",
+                    "file_type": "pdf",
                 },
             },
             {
@@ -33,6 +35,7 @@ def test_citations_sort_deduplicate_and_truncate() -> None:
                     "page": "7",
                     "snippet": "第二页",
                     "modality": "image",
+                    "file_type": "pptx",
                 },
             },
         ]
@@ -42,4 +45,6 @@ def test_citations_sort_deduplicate_and_truncate() -> None:
     assert citations[0]["page"] == 2
     assert len(citations[0]["snippet"]) == 200
     assert citations[0]["score"] == 0.95
+    assert citations[0]["file_type"] == "pdf"
     assert citations[1]["page"] == "7"
+    assert citations[1]["file_type"] == "pptx"
