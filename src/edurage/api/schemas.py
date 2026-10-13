@@ -17,7 +17,19 @@ class UploadResponse(BaseModel):
 class QueryRequest(BaseModel):
     question: str = Field(min_length=1)
     course_code: str | None = "CS-COMP-ORG"
+    document_id: str | None = None
     top_k: int | None = Field(default=None, ge=1)
+
+
+class DocumentSummary(BaseModel):
+    document_id: str
+    filename: str
+    course_code: str
+    file_type: str
+    status: str
+    page_count: int
+    chunk_count: int
+    created_at: str
 
 
 class Citation(BaseModel):

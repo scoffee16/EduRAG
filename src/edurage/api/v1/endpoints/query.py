@@ -18,11 +18,10 @@ def query(
     request: QueryRequest,
     service: Annotated[RAGService, Depends(get_rag_service)] = None,
 ) -> QueryResponse:
-    result = service.answer_question(
-        request.question,
-        course_code=request.course_code,
-        top_k=request.top_k,
-    )
+    kwargs = {"course_code": request.course_code, "top_k": request.top_k}
+    if request.document_id is not None:
+        kwargs["document_id"] = request.document_id
+    result = service.answer_question(request.question, **kwargs)
     return QueryResponse(
         answer=str(result["answer"]),
         citations=result.get("citations", []),

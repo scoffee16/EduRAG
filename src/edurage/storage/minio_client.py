@@ -50,3 +50,22 @@ def presigned_get_url(key: str, client: Minio | None = None) -> str:
     settings = get_settings()
     client = client or get_minio_client(settings)
     return client.presigned_get_object(settings.minio_bucket, key, expires=timedelta(hours=1))
+
+
+def delete_object(key: str, client: Minio | None = None) -> None:
+    """Delete one object from the configured bucket."""
+
+    settings = get_settings()
+    client = client or get_minio_client(settings)
+    client.remove_object(settings.minio_bucket, key)
+
+
+class MinioObjectStore:
+    """Document lifecycle adapter over the configured MinIO bucket."""
+
+    def __init__(self, client: Minio, settings: Settings) -> None:
+        self.client = client
+        self.settings = settings
+
+    def delete_object(self, storage_path: str) -> None:
+        self.client.remove_object(self.settings.minio_bucket, storage_path)
