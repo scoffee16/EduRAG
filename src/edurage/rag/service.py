@@ -14,10 +14,14 @@ def _invoke_retriever(
     retriever: Any,
     question: str,
     course_code: str | None,
+    document_id: str | None,
     top_k: int | None,
 ) -> list[Mapping[str, Any]]:
     method = getattr(retriever, "retrieve", retriever)
-    return list(method(question, course_code=course_code, top_k=top_k) or [])
+    kwargs: dict[str, Any] = {"course_code": course_code, "top_k": top_k}
+    if document_id is not None:
+        kwargs["document_id"] = document_id
+    return list(method(question, **kwargs) or [])
 
 
 def _invoke_llm(
@@ -34,6 +38,7 @@ def answer_question(
     course_code: str | None = None,
     top_k: int | None = None,
     *,
+    document_id: str | None = None,
     retriever: Any,
     llm: Any,
     model: str | None = None,
@@ -42,7 +47,7 @@ def answer_question(
     """Retrieve evidence, generate an answer, and return page citations."""
 
     started = clock()
-    hits = _invoke_retriever(retriever, question, course_code, top_k)
+    hits = _invoke_retriever(retriever, question, course_code, document_id, top_k)
     if not hits:
         answer = NO_EVIDENCE_ANSWER
         citations: list[dict[str, Any]] = []

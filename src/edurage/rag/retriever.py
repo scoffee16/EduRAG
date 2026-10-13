@@ -5,6 +5,8 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any, Protocol
 
+from qdrant_client.http import models as qdrant_models
+
 from edurage.core.config import get_settings
 
 
@@ -23,6 +25,21 @@ class QdrantClient(Protocol):
 
     def search(self, **kwargs: Any) -> Any:
         """Search a collection and return scored points."""
+
+
+class _CompatFilter(qdrant_models.Filter):
+    """Qdrant Filter with read compatibility for ED-01 fake clients."""
+
+    def __getitem__(self, key: str) -> Any:
+        if key == "must":
+            return [
+                {
+                    "key": condition.key,
+                    "match": {"value": condition.match.value},
+                }
+                for condition in (self.must or [])
+            ]
+        return getattr(self, key)
 
 
 def _setting(name: str, default: Any) -> Any:
@@ -90,6 +107,7 @@ class Retriever:
         question: str,
         course_code: str | None = None,
         top_k: int | None = None,
+        document_id: str | None = None,
     ) -> list[dict[str, Any]]:
         vector = _embed_query(self.embedder, question)
         limit = top_k or int(_setting("top_k", 5))
@@ -99,15 +117,23 @@ class Retriever:
             "limit": limit,
             "with_payload": True,
         }
+        conditions = []
         if course_code:
-            kwargs["query_filter"] = {
-                "must": [
-                    {
-                        "key": "course_code",
-                        "match": {"value": course_code},
-                    }
-                ]
-            }
+            conditions.append(
+                qdrant_models.FieldCondition(
+                    key="course_code",
+                    match=qdrant_models.MatchValue(value=course_code),
+                )
+            )
+        if document_id:
+            conditions.append(
+                qdrant_models.FieldCondition(
+                    key="document_id",
+                    match=qdrant_models.MatchValue(value=document_id),
+                )
+            )
+        if conditions:
+            kwargs["query_filter"] = _CompatFilter(must=conditions)
         result = _search(self.client, kwargs)
         points = getattr(result, "points", result)
         return [_point_to_hit(point) for point in (points or [])]
@@ -120,6 +146,7 @@ def retrieve(
     course_code: str | None = None,
     top_k: int | None = None,
     *,
+    document_id: str | None = None,
     embedder: Embedder,
     client: QdrantClient,
     collection_name: str = "edurage_chunks",
@@ -127,5 +154,5 @@ def retrieve(
     """Functional wrapper around :class:`Retriever`."""
 
     return Retriever(embedder, client, collection_name).retrieve(
-        question, course_code, top_k
+        question, course_code, top_k, document_id
     )
