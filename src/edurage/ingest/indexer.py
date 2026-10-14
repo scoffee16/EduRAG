@@ -18,9 +18,9 @@ from sqlalchemy.orm import Session, sessionmaker
 from edurage.core.config import Settings, get_settings
 from edurage.db.engine import get_session_factory
 from edurage.db.models import Chunk, CoursePack, Document
-from edurage.ingest.chunker import chunk_pages
 from edurage.ingest.document_parser import detect_file_type, parse_document
 from edurage.ingest.embedder import Embedder, OpenAIEmbedder
+from edurage.ingest.structured_chunker import structured_chunk_pages
 from edurage.storage.minio_client import get_minio_client
 from edurage.vector.qdrant_client import get_qdrant_client
 
@@ -112,7 +112,7 @@ class IngestIndexer:
             raise ValueError(f"Expected a {expected} file, got: {document_path}")
 
         pages = parse_document(document_path)
-        chunks = chunk_pages(
+        chunks = structured_chunk_pages(
             pages,
             chunk_size=self.settings.chunk_size,
             overlap=self.settings.chunk_overlap,
@@ -165,6 +165,10 @@ class IngestIndexer:
                     "modality": chunk["modality"],
                     "text": chunk["text"],
                     "file_type": file_type,
+                    "block_type": chunk["block_type"],
+                    "section": chunk["section"],
+                    "text_sources": chunk["text_sources"],
+                    "ocr_confidence": chunk["ocr_confidence"],
                 }
                 point_records.append(
                     {"id": point_id, "vector": vector, "payload": payload}
@@ -180,6 +184,10 @@ class IngestIndexer:
                             "page": chunk["page"],
                             "chunk_index": chunk["chunk_index"],
                             "file_type": file_type,
+                            "block_type": chunk["block_type"],
+                            "section": chunk["section"],
+                            "text_sources": chunk["text_sources"],
+                            "ocr_confidence": chunk["ocr_confidence"],
                         },
                     }
                 )
