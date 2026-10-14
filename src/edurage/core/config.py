@@ -43,6 +43,12 @@ class Settings(BaseSettings):
     top_k: int = 5
     llm_temperature: float = 0.1
     llm_timeout_s: int = 60
+    ocr_enabled: bool = False
+    ocr_engine: str = "tesseract"
+    ocr_dpi: int = 180
+    ocr_min_text_chars: int = 80
+    ocr_min_image_ratio: float = 0.35
+    ocr_language: str = "chi_sim+eng"
 
 
 @lru_cache

@@ -21,6 +21,7 @@ from edurage.db.models import Chunk, CoursePack, Document
 from edurage.ingest.chunker import chunk_pages
 from edurage.ingest.document_parser import detect_file_type, parse_document
 from edurage.ingest.embedder import Embedder, OpenAIEmbedder
+from edurage.ingest.ocr import OCRProvider, build_ocr_provider
 from edurage.storage.minio_client import get_minio_client
 from edurage.vector.qdrant_client import get_qdrant_client
 
@@ -75,6 +76,7 @@ class IngestIndexer:
         object_store: ObjectStore,
         collection_name: str | None = None,
         settings: Settings | None = None,
+        ocr_provider: OCRProvider | None = None,
     ) -> None:
         self.settings = settings or get_settings()
         self.embedder = embedder
@@ -82,6 +84,10 @@ class IngestIndexer:
         self.repository = repository
         self.object_store = object_store
         self.collection_name = collection_name or self.settings.qdrant_collection
+        self.ocr_provider = ocr_provider or build_ocr_provider(
+            self.settings.ocr_enabled,
+            self.settings.ocr_engine,
+        )
 
     def ingest_pdf(self, path: str | Path, course_code: str) -> dict[str, Any]:
         """Parse, chunk, embed, and persist a PDF, compensating partial writes on error."""
@@ -111,7 +117,11 @@ class IngestIndexer:
             expected = expected_file_type.upper()
             raise ValueError(f"Expected a {expected} file, got: {document_path}")
 
-        pages = parse_document(document_path)
+        pages = parse_document(
+            document_path,
+            settings=self.settings,
+            ocr_provider=self.ocr_provider,
+        )
         chunks = chunk_pages(
             pages,
             chunk_size=self.settings.chunk_size,
@@ -165,6 +175,10 @@ class IngestIndexer:
                     "modality": chunk["modality"],
                     "text": chunk["text"],
                     "file_type": file_type,
+                    "source": chunk["source_type"],
+                    "text_sources": chunk["text_sources"],
+                    "ocr_confidence": chunk["ocr_confidence"],
+                    "ocr_error": chunk["ocr_error"],
                 }
                 point_records.append(
                     {"id": point_id, "vector": vector, "payload": payload}
@@ -180,6 +194,10 @@ class IngestIndexer:
                             "page": chunk["page"],
                             "chunk_index": chunk["chunk_index"],
                             "file_type": file_type,
+                            "source": chunk["source_type"],
+                            "text_sources": chunk["text_sources"],
+                            "ocr_confidence": chunk["ocr_confidence"],
+                            "ocr_error": chunk["ocr_error"],
                         },
                     }
                 )

@@ -13,6 +13,20 @@ dependencies, and start the application with reload enabled.
 Runtime document parsing dependencies include PyMuPDF for PDF text extraction and
 python-pptx for lightweight PPTX slide text extraction.
 
+Selective OCR is disabled by default. To enable the local Tesseract adapter,
+install the optional Python dependencies and the Tesseract binary separately:
+
+```powershell
+python -m pip install -e ".[dev,ocr]"
+```
+
+The Tesseract executable must be available on `PATH`. Chinese OCR also requires
+the matching `chi_sim` trained data in the Tesseract `tessdata` directory;
+`chi_sim+eng` is the default language setting. If Tesseract or its language data
+is unavailable, OCR is reported as a fallback condition and ordinary PDF text
+ingestion continues. Automated tests use a fake provider and do not access the
+network. Real-engine checks are integration-only and skipped by default.
+
 PowerShell:
 
 ```powershell
@@ -177,5 +191,6 @@ summary. Do not turn a failed live call into a passing result.
 ### ED-02 scope note
 
 ED-02 supports lightweight text and table extraction from PDF/PPTX with
-page/slide-level citations. Images, audio, animations, and embedded objects are
-currently not parsed.
+page/slide-level citations. ED-03-01 adds selective OCR for image-heavy PDF
+pages; image OCR remains dependent on local Tesseract installation and language
+data.

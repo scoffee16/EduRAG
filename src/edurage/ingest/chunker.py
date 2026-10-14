@@ -16,6 +16,10 @@ class TextChunk(TypedDict):
     page: int
     chunk_index: int
     modality: str
+    source_type: str
+    text_sources: list[str]
+    ocr_confidence: float | None
+    ocr_error: str | None
 
 
 def chunk_pages(
@@ -43,14 +47,36 @@ def chunk_pages(
         while start < len(text):
             content = text[start : start + chunk_size]
             if content.strip():
+                sources = page_data.get("text_sources", ["text"])
                 chunks.append(
                     {
                         "text": content,
                         "page": page_number,
                         "chunk_index": len(chunks),
-                        "modality": "text",
+                        "modality": _modality(sources),
+                        "source_type": str(page_data.get("source_type", "text")),
+                        "text_sources": list(sources)
+                        if isinstance(sources, list)
+                        else ["text"],
+                        "ocr_confidence": _confidence(page_data.get("ocr_confidence")),
+                        "ocr_error": (
+                            str(page_data["ocr_error"])
+                            if page_data.get("ocr_error")
+                            else None
+                        ),
                     }
                 )
             start += step
 
     return chunks
+
+
+def _modality(sources: object) -> str:
+    source_list = sources if isinstance(sources, list) else ["text"]
+    if "ocr" in source_list and "text" in source_list:
+        return "text_ocr"
+    return "ocr" if "ocr" in source_list else "text"
+
+
+def _confidence(value: object) -> float | None:
+    return float(value) if isinstance(value, (int, float)) else None

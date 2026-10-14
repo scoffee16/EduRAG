@@ -34,6 +34,12 @@ DEFAULT_SETTINGS = {
     "top_k": 5,
     "llm_temperature": 0.1,
     "llm_timeout_s": 60,
+    "ocr_enabled": False,
+    "ocr_engine": "tesseract",
+    "ocr_dpi": 180,
+    "ocr_min_text_chars": 80,
+    "ocr_min_image_ratio": 0.35,
+    "ocr_language": "chi_sim+eng",
 }
 
 
