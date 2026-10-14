@@ -22,6 +22,6 @@ def test_env_example_matches_settings_fields(project_root: Path) -> None:
         f"EDURAGE_{field_name.upper()}" for field_name in Settings.model_fields
     }
 
-    assert len(environment_keys) == 35
-    assert len(settings_keys) == 35
+    assert len(environment_keys) == 38
+    assert len(settings_keys) == 38
     assert environment_keys == settings_keys

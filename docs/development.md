@@ -160,6 +160,15 @@ files, and API keys must not be committed. DeepSeek and DashScope keys must
 never be written to logs. Live cloud calls are optional and must use sanitized
 output only.
 
+## ED-03 Hybrid Retrieval
+
+`HybridRetriever` composes the existing Qdrant `Retriever` with an injectable
+keyword retriever and deterministic reranker. Its default local keyword matcher
+scores vector candidates without network access. A separate keyword backend can
+be injected to add candidates from another local index. Candidate retrieval
+defaults to 20 before the requested `top_k` is returned; weights default to
+0.6 vector and 0.4 keyword. Existing page and document metadata is retained.
+
 ## Known Issues
 
 ### Starlette/httpx third-party deprecation warning
