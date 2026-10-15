@@ -1,6 +1,12 @@
 from typing import Any
 
-from edurage.rag.hybrid_retriever import DeterministicReranker, HybridRetriever
+from edurage.rag.hybrid_retriever import (
+    DeterministicReranker,
+    HybridRetriever,
+    LocalKeywordRetriever,
+    QdrantKeywordCandidateSource,
+    build_hybrid_retriever,
+)
 from edurage.rag.prompt import NO_EVIDENCE_ANSWER
 from edurage.rag.service import answer_question
 
@@ -128,3 +134,79 @@ def test_empty_results_keep_existing_refusal_without_external_calls() -> None:
 
     assert result["answer"] == NO_EVIDENCE_ANSWER
     assert result["citations"] == []
+
+
+class FakeScrollClient:
+    def __init__(self, points: list[dict[str, Any]]) -> None:
+        self.points = points
+        self.calls: list[dict[str, Any]] = []
+
+    def scroll(self, **kwargs: Any) -> tuple[list[dict[str, Any]], None]:
+        self.calls.append(kwargs)
+        return self.points[: kwargs["limit"]], None
+
+
+def test_independent_keyword_source_uses_payload_only_bounded_filtered_scroll() -> None:
+    client = FakeScrollClient(
+        [
+            {
+                "payload": {
+                    "course_code": "CS-DEMO",
+                    "document_id": "doc-b",
+                    "page": 5,
+                    "chunk_index": 0,
+                    "text": "ADD 微地址",
+                }
+            }
+        ]
+    )
+    source = QdrantKeywordCandidateSource(client, "chunks", scan_limit=7)
+    hits = LocalKeywordRetriever(source, scan_limit=7).retrieve(
+        "ADD 微地址",
+        course_code="CS-DEMO",
+        document_id="doc-b",
+        candidates=[],
+    )
+    assert hits[0]["payload"]["page"] == 5
+    assert client.calls[0]["with_vectors"] is False
+    assert client.calls[0]["limit"] == 7
+    query_filter = client.calls[0]["scroll_filter"]
+    assert [(condition.key, condition.match.value) for condition in query_filter.must] == [
+        ("course_code", "CS-DEMO"),
+        ("document_id", "doc-b"),
+    ]
+
+
+def test_independent_keyword_source_exposes_scan_truncation() -> None:
+    class TruncatedClient(FakeScrollClient):
+        def scroll(self, **kwargs: Any) -> tuple[list[dict[str, Any]], str]:
+            self.calls.append(kwargs)
+            return self.points, "next-page"
+
+    source = QdrantKeywordCandidateSource(
+        TruncatedClient([{"payload": {"text": "ADD 微地址"}}]),
+        "chunks",
+        scan_limit=1,
+    )
+    source.retrieve(course_code="CS-DEMO", limit=1)
+    assert source.truncated is True
+
+
+def test_factory_installs_independent_source_when_vector_retriever_exposes_scroll_client() -> None:
+    vector = FakeVectorRetriever([])
+    vector.client = FakeScrollClient([])
+    settings = type(
+        "Settings",
+        (),
+        {
+            "qdrant_collection": "chunks",
+            "keyword_scan_limit": 13,
+            "vector_weight": 0.6,
+            "keyword_weight": 0.4,
+            "candidate_k": 20,
+        },
+    )()
+    hybrid = build_hybrid_retriever(vector, settings)
+    assert isinstance(hybrid.keyword_retriever, LocalKeywordRetriever)
+    assert hybrid.keyword_retriever.scan_limit == 13
+    assert hybrid.keyword_retriever.candidate_source is not None

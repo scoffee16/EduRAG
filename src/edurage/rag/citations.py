@@ -41,15 +41,17 @@ def build_citations(hits: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
         if key in seen:
             continue
         seen.add(key)
-        citations.append(
-            {
-                "document_id": payload.get("document_id"),
-                "filename": payload.get("filename"),
-                "page": payload.get("page"),
-                "snippet": _snippet(payload),
-                "score": hit.get("score"),
-                "modality": payload.get("modality"),
-                "file_type": payload.get("file_type"),
-            }
-        )
+        citation = {
+            "document_id": payload.get("document_id"),
+            "filename": payload.get("filename"),
+            "page": payload.get("page"),
+            "snippet": _snippet(payload),
+            "score": hit.get("score"),
+            "modality": payload.get("modality"),
+            "file_type": payload.get("file_type"),
+        }
+        for field in ("page_used_ocr", "block_type", "text_sources"):
+            if field in payload:
+                citation[field] = payload[field]
+        citations.append(citation)
     return citations

@@ -31,6 +31,9 @@ DEFAULT_SETTINGS = {
     "chunk_size": 500,
     "chunk_overlap": 80,
     "upload_max_mb": 20,
+    "api_rate_limit_per_minute": 60,
+    "api_max_concurrency": 2,
+    "keyword_scan_limit": 2000,
     "top_k": 5,
     "vector_weight": 0.6,
     "keyword_weight": 0.4,
@@ -92,6 +95,9 @@ def test_ed01_settings_defaults() -> None:
     assert settings.chunk_size == 500
     assert settings.chunk_overlap == 80
     assert settings.upload_max_mb == 20
+    assert settings.api_rate_limit_per_minute == 60
+    assert settings.api_max_concurrency == 2
+    assert settings.keyword_scan_limit == 2000
     assert settings.top_k == 5
     assert settings.vector_weight == 0.6
     assert settings.keyword_weight == 0.4

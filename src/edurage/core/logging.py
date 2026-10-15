@@ -22,8 +22,17 @@ class JsonFormatter(logging.Formatter):
             "message": record.getMessage(),
         }
         if record.exc_info:
-            payload["exception"] = self.formatException(record.exc_info)
+            payload["exception_type"] = record.exc_info[0].__name__
+        for field in ("request_id", "endpoint", "stage", "elapsed_ms", "status", "pages", "chunks",
+                      "ocr_pages", "error_code"):
+            value = getattr(record, field, None)
+            if value is not None:
+                payload[field] = value
         return json.dumps(payload, ensure_ascii=False)
+
+
+def get_logger(name: str) -> logging.Logger:
+    return logging.getLogger(name)
 
 
 def configure_logging(log_level: str | None = None) -> None:

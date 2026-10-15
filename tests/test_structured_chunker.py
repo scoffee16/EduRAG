@@ -12,8 +12,9 @@ def test_preserves_titles_paragraphs_and_sections() -> None:
         ]
     )
 
-    assert [chunk["block_type"] for chunk in chunks] == ["title", "paragraph"]
-    assert chunks[1]["section"] == "3.1 实验步骤"
+    assert len(chunks) == 1
+    assert chunks[0]["section"] == "3.1 实验步骤"
+    assert "先连接电源" in chunks[0]["text"]
 
 
 def test_keeps_table_rows_in_order() -> None:
@@ -55,7 +56,7 @@ def test_ocr_metadata_is_preserved_without_duplicate_text() -> None:
 
     assert len(chunks) == 1
     assert chunks[0]["modality"] == "ocr"
-    assert chunks[0]["block_type"] == "ocr"
+    assert chunks[0]["block_type"] == "paragraph"
     assert chunks[0]["text_sources"] == ["ocr"]
     assert chunks[0]["ocr_confidence"] == 0.87
     assert chunks[0]["text"] == "微地址 00H -> 01H"
@@ -71,3 +72,48 @@ def test_pdf_and_pptx_use_the_same_page_metadata_shape() -> None:
 
     assert pdf["page"] == pptx["page"] == 3
     assert set(pdf) == set(pptx)
+
+
+def test_adjacent_short_rows_pack_without_crossing_pages() -> None:
+    chunks = structured_chunk_pages(
+        [
+            {"page": 1, "text": "A\n1\nB\n2\nC\n3", "text_sources": ["text"]},
+            {"page": 2, "text": "next page", "text_sources": ["text"]},
+        ],
+        chunk_size=20,
+        overlap=4,
+    )
+
+    assert len(chunks) == 2
+    assert chunks[0]["page"] == 1
+    assert "A\n1\nB\n2" in chunks[0]["text"]
+    assert [chunk["chunk_index"] for chunk in chunks] == [0, 1]
+
+
+def test_mixed_source_chunk_keeps_ocr_marker_out_of_text() -> None:
+    chunks = structured_chunk_pages(
+        [
+            {
+                "page": 1,
+                "text": "text line\n\n[OCR]\nocr line",
+                "text_sources": ["text", "ocr"],
+                "page_used_ocr": True,
+            }
+        ],
+        chunk_size=100,
+    )
+
+    assert len(chunks) == 1
+    assert chunks[0]["modality"] == "mixed"
+    assert chunks[0]["text_sources"] == ["text", "ocr"]
+    assert "[OCR]" not in chunks[0]["text"]
+    assert chunks[0]["page_used_ocr"] is True
+
+
+def test_caption_is_structural_metadata_not_modality() -> None:
+    chunk = structured_chunk_pages(
+        [{"page": 1, "text": "图 1 系统结构\n说明文字", "text_sources": ["ocr"]}]
+    )[0]
+
+    assert chunk["block_type"] == "caption"
+    assert chunk["modality"] == "ocr"

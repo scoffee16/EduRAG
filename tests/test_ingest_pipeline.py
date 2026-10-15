@@ -137,6 +137,32 @@ def test_pipeline_compensates_persisted_resources_when_metadata_write_fails(
     assert objects.objects == {}
 
 
+def test_pipeline_uses_clean_original_filename_everywhere(tmp_path: Path) -> None:
+    source = _write_pdf(tmp_path / "upload-uuid.pdf", ["some document text"])
+    indexer, vectors, repository, objects = _fake_indexer()
+
+    result = indexer.ingest_pdf(
+        source,
+        "CS-DEMO",
+        original_filename=r"C:\Uploads\原始课件.pdf",
+    )
+
+    document = repository.documents[result["document_id"]]
+    assert document["filename"] == "原始课件.pdf"
+    assert document["storage_path"].endswith("/原始课件.pdf")
+    assert list(objects.objects) == [document["storage_path"]]
+    assert vectors.points[0]["payload"]["filename"] == "原始课件.pdf"
+    assert repository.chunks[0]["metadata"]["filename"] == "原始课件.pdf"
+
+
+def test_original_filename_rejects_empty_basename(tmp_path: Path) -> None:
+    source = _write_pdf(tmp_path / "upload.pdf", ["text"])
+    indexer, _, _, _ = _fake_indexer()
+
+    with pytest.raises(ValueError, match="usable basename"):
+        indexer.ingest_pdf(source, "CS-DEMO", original_filename="C:\\Uploads\\")
+
+
 class _FakeEmbeddingResponse:
     def __init__(self, data: list[Any]) -> None:
         self.data = data

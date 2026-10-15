@@ -57,7 +57,25 @@ def test_query_returns_answer_citations_and_request_id(client: TestClient) -> No
     assert body["citations"][0]["page"] == 2
     assert body["model"] == "deepseek-chat"
     assert body["request_id"]
+    assert body["request_id"] == response.headers["x-request-id"]
     assert service.calls == [("ADD 指令的微地址序列是什么？", "CS-DEMO", 3)]
+
+
+def test_query_uses_valid_incoming_request_id(client: TestClient) -> None:
+    service = FakeRAGService(
+        {"answer": "ok", "citations": [], "model": "deepseek-chat", "latency_ms": 0}
+    )
+    client.app.dependency_overrides[get_rag_service] = lambda: service
+
+    response = client.post(
+        "/api/v1/query",
+        headers={"X-Request-ID": "12345678-1234-4234-8234-123456789abc"},
+        json={"question": "q"},
+    )
+
+    assert response.status_code == 200
+    assert response.headers["x-request-id"] == "12345678-1234-4234-8234-123456789abc"
+    assert response.json()["request_id"] == response.headers["x-request-id"]
 
 
 def test_query_without_hits_returns_refusal_and_empty_citations(client: TestClient) -> None:

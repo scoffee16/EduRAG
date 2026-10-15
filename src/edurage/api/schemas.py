@@ -46,6 +46,9 @@ class Citation(BaseModel):
     score: float | None = None
     modality: str | None = None
     file_type: str | None = None
+    page_used_ocr: bool | None = None
+    block_type: str | None = None
+    text_sources: list[str] | None = None
 
 
 class QueryResponse(BaseModel):
