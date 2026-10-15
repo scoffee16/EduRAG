@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Literal, NotRequired, TypedDict
 
 from edurage.core.config import Settings
-from edurage.ingest.ocr import OCRProvider
+from edurage.ingest.ocr import OCRProvider, build_ocr_provider
 from edurage.ingest.pdf_parser import parse_pdf
 from edurage.ingest.pptx_parser import parse_pptx
 
@@ -51,9 +51,15 @@ def parse_document(
                 else parse_pdf(document_path)
             )
         else:
+            effective_ocr_provider = ocr_provider
+            if effective_ocr_provider is None and settings.ocr_enabled:
+                effective_ocr_provider = build_ocr_provider(
+                    settings.ocr_enabled,
+                    settings.ocr_engine,
+                )
             pages = parse_pdf(
                 document_path,
-                ocr_provider=ocr_provider,
+                ocr_provider=effective_ocr_provider,
                 ocr_enabled=settings.ocr_enabled,
                 ocr_dpi=settings.ocr_dpi,
                 ocr_min_text_chars=settings.ocr_min_text_chars,
