@@ -37,3 +37,8 @@ huggingface/
 .coverage
 .coverage.*
 htmlcov/
+
+# IDE project files
+.idea/
+*.iml
+
