@@ -48,6 +48,7 @@ class Settings(BaseSettings):
     llm_timeout_s: int = 60
     ocr_enabled: bool = False
     ocr_engine: str = "tesseract"
+    ocr_tesseract_cmd: str = "tesseract"
     ocr_dpi: int = 180
     ocr_min_text_chars: int = 80
     ocr_min_image_ratio: float = 0.35

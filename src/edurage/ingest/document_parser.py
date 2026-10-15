@@ -56,6 +56,7 @@ def parse_document(
                 effective_ocr_provider = build_ocr_provider(
                     settings.ocr_enabled,
                     settings.ocr_engine,
+                    tesseract_cmd=settings.ocr_tesseract_cmd,
                 )
             pages = parse_pdf(
                 document_path,

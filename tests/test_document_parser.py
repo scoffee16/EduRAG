@@ -53,11 +53,11 @@ def test_document_parser_builds_default_ocr_provider_when_enabled(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     built = object()
-    calls: list[tuple[bool, str]] = []
+    calls: list[tuple[bool, str, object]] = []
     parsed: list[object] = []
 
-    def fake_build(enabled: bool, engine: str) -> object:
-        calls.append((enabled, engine))
+    def fake_build(enabled: bool, engine: str, **kwargs: object) -> object:
+        calls.append((enabled, engine, kwargs.get("tesseract_cmd")))
         return built
 
     def fake_parse_pdf(path: Path, **kwargs: object) -> list[dict[str, object]]:
@@ -69,18 +69,22 @@ def test_document_parser_builds_default_ocr_provider_when_enabled(
 
     pages = document_parser.parse_document(
         Path("demo.pdf"),
-        settings=Settings(ocr_enabled=True, ocr_engine="tesseract"),
+        settings=Settings(
+            ocr_enabled=True,
+            ocr_engine="tesseract",
+            ocr_tesseract_cmd="/opt/tesseract",
+        ),
     )
 
     assert pages[0]["source_type"] == "pdf"
-    assert calls == [(True, "tesseract")]
+    assert calls == [(True, "tesseract", "/opt/tesseract")]
     assert parsed == [built]
 
 
 def test_document_parser_does_not_build_ocr_provider_when_disabled(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    def fail_build(enabled: bool, engine: str) -> object:
+    def fail_build(enabled: bool, engine: str, **kwargs: object) -> object:
         raise AssertionError("OCR provider must not be built when OCR is disabled")
 
     captured: list[object] = []
@@ -110,7 +114,7 @@ def test_document_parser_preserves_explicit_ocr_provider(
     monkeypatch.setattr(
         document_parser,
         "build_ocr_provider",
-        lambda enabled, engine: built,
+        lambda enabled, engine, **kwargs: built,
     )
 
     def fake_parse_pdf(path: Path, **kwargs: object) -> list[dict[str, object]]:

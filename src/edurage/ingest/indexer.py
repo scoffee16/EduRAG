@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import uuid
 from collections.abc import Mapping, Sequence
 from contextlib import suppress
@@ -18,7 +19,11 @@ from sqlalchemy.orm import Session, sessionmaker
 from edurage.core.config import Settings, get_settings
 from edurage.db.engine import get_session_factory
 from edurage.db.models import Chunk, CoursePack, Document
-from edurage.ingest.document_parser import detect_file_type, parse_document
+from edurage.ingest.document_parser import (
+    ParsedDocumentPage,
+    detect_file_type,
+    parse_document,
+)
 from edurage.ingest.embedder import Embedder, OpenAIEmbedder
 from edurage.ingest.ocr import OCRProvider, build_ocr_provider
 from edurage.ingest.structured_chunker import structured_chunk_pages
@@ -30,6 +35,8 @@ CONTENT_TYPES = {
     "pdf": "application/pdf",
     "pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
 }
+
+logger = logging.getLogger(__name__)
 
 
 class VectorStore(Protocol):
@@ -87,6 +94,7 @@ class IngestIndexer:
         self.ocr_provider = ocr_provider or build_ocr_provider(
             self.settings.ocr_enabled,
             self.settings.ocr_engine,
+            tesseract_cmd=self.settings.ocr_tesseract_cmd,
         )
 
     def ingest_pdf(self, path: str | Path, course_code: str) -> dict[str, Any]:
@@ -121,6 +129,11 @@ class IngestIndexer:
             document_path,
             settings=self.settings,
             ocr_provider=self.ocr_provider,
+        )
+        ocr_summary = _log_ocr_outcome(
+            pages,
+            filename=document_path.name,
+            enabled=self.settings.ocr_enabled,
         )
         chunks = structured_chunk_pages(
             pages,
@@ -240,6 +253,7 @@ class IngestIndexer:
             "file_type": file_type,
             "pages": len(pages),
             "chunks": len(chunks),
+            **ocr_summary,
         }
 
 
@@ -373,6 +387,41 @@ def create_default_indexer(settings: Settings | None = None) -> IngestIndexer:
         object_store=MinioObjectStore(get_minio_client(settings), settings),
         settings=settings,
     )
+
+
+def _log_ocr_outcome(
+    pages: list[ParsedDocumentPage],
+    *,
+    filename: str,
+    enabled: bool,
+) -> dict[str, int]:
+    """Report whether selective OCR actually ran, so silent fallback stays visible."""
+
+    ocr_pages = [page for page in pages if "ocr" in (page.get("text_sources") or [])]
+    failed_pages = [page for page in pages if page.get("ocr_error")]
+    if not enabled:
+        logger.info("OCR disabled; parsed %s from embedded text only", filename)
+    elif failed_pages:
+        logger.warning(
+            "OCR failed on %d of %d page(s) of %s; first error: %s",
+            len(failed_pages),
+            len(pages),
+            filename,
+            failed_pages[0]["ocr_error"],
+        )
+    elif not ocr_pages:
+        logger.info(
+            "OCR enabled but unused for %s: every page already had enough embedded text",
+            filename,
+        )
+    else:
+        logger.info(
+            "OCR produced text for %d of %d page(s) of %s",
+            len(ocr_pages),
+            len(pages),
+            filename,
+        )
+    return {"ocr_pages": len(ocr_pages), "ocr_failed_pages": len(failed_pages)}
 
 
 def _best_effort(cleanup: Any) -> None:

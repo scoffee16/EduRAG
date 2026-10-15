@@ -20,12 +20,31 @@ install the optional Python dependencies and the Tesseract binary separately:
 python -m pip install -e ".[dev,ocr]"
 ```
 
-The Tesseract executable must be available on `PATH`. Chinese OCR also requires
-the matching `chi_sim` trained data in the Tesseract `tessdata` directory;
-`chi_sim+eng` is the default language setting. If Tesseract or its language data
-is unavailable, OCR is reported as a fallback condition and ordinary PDF text
-ingestion continues. Automated tests use a fake provider and do not access the
-network. Real-engine checks are integration-only and skipped by default.
+The Tesseract executable must be reachable by the process. It is resolved through
+`PATH` by default; set `EDURAGE_OCR_TESSERACT_CMD` to an absolute path when the
+binary is installed elsewhere, for example
+`C:\Program Files\Tesseract-OCR\tesseract.exe` on Windows or `/usr/bin/tesseract`
+in a container. Chinese OCR also requires the matching `chi_sim` trained data in
+the Tesseract `tessdata` directory; `chi_sim+eng` is the default language setting.
+
+If Tesseract or its language data is unavailable, OCR is reported as a fallback
+condition and ordinary PDF text ingestion continues: a failing page keeps its
+embedded text, `ocr_error` records the reason in the Qdrant payload and chunk
+metadata, and ingestion logs one warning per failed page. A document is never
+rejected because OCR failed. Selective OCR only runs on pages that look
+image-heavy or text-poor (`EDURAGE_OCR_MIN_TEXT_CHARS`, `EDURAGE_OCR_MIN_IMAGE_RATIO`),
+so a text-only PDF legitimately produces no OCR text; ingestion logs that outcome
+explicitly instead of failing silently.
+
+`GET /api/v1/health/ocr` reports OCR readiness: `disabled` (HTTP 200) when
+`EDURAGE_OCR_ENABLED=false`, `ok` (HTTP 200) when the engine and every requested
+language resolve, and `unavailable` (HTTP 503) otherwise. The body also carries
+`tesseract_version`, `tesseract_cmd`, the available `languages`, and
+`missing_languages`, so a container can assert OCR readiness before accepting
+scanned documents. The frozen `/api/v1/health` liveness contract is unchanged.
+
+Automated tests use a fake provider and do not access the network. Real-engine
+checks are integration-only and skipped by default.
 
 PowerShell:
 

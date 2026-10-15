@@ -1,8 +1,8 @@
-"""Replaceable OCR providers and selective OCR page detection."""
+"""Replaceable OCR providers, readiness probing, and selective OCR page detection."""
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from io import BytesIO
 from typing import Literal, Protocol
 
@@ -28,8 +28,25 @@ class OCRUnavailableError(RuntimeError):
     """Raised when the configured OCR engine cannot be used."""
 
 
+@dataclass(frozen=True)
+class OcrDiagnostics:
+    """Readiness probe result for the configured OCR engine."""
+
+    enabled: bool
+    engine: str
+    available: bool
+    tesseract_cmd: str
+    version: str | None = None
+    languages: list[str] = field(default_factory=list)
+    missing_languages: list[str] = field(default_factory=list)
+    error: str | None = None
+
+
 class TesseractOCRProvider:
     """Local Tesseract adapter with optional dependencies imported on demand."""
+
+    def __init__(self, tesseract_cmd: str | None = None) -> None:
+        self.tesseract_cmd = (tesseract_cmd or "").strip() or "tesseract"
 
     def recognize(self, image: bytes, *, page: int, language: str) -> OcrPageResult:
         try:
@@ -40,6 +57,8 @@ class TesseractOCRProvider:
             raise OCRUnavailableError(
                 "Tesseract OCR requires the pytesseract and Pillow Python packages."
             ) from exc
+
+        pytesseract.pytesseract.tesseract_cmd = self.tesseract_cmd
 
         try:
             data = pytesseract.image_to_data(
@@ -112,11 +131,75 @@ def should_ocr_page(
     return image_area_ratio >= min_image_ratio and text_length < min_text_chars * 2
 
 
-def build_ocr_provider(enabled: bool, engine: str) -> OCRProvider | None:
+def requested_languages(language: str) -> list[str]:
+    """Split a Tesseract language expression such as ``chi_sim+eng``."""
+
+    return [name.strip() for name in language.split("+") if name.strip()]
+
+
+def check_ocr_availability(
+    *,
+    enabled: bool,
+    engine: str,
+    tesseract_cmd: str = "tesseract",
+    language: str = "chi_sim+eng",
+) -> OcrDiagnostics:
+    """Probe the configured engine so a silent OCR fallback becomes observable."""
+
+    command = (tesseract_cmd or "").strip() or "tesseract"
+    engine_name = engine.lower()
+    base = OcrDiagnostics(
+        enabled=enabled,
+        engine=engine_name,
+        available=False,
+        tesseract_cmd=command,
+    )
+    if not enabled:
+        return base
+    if engine_name != "tesseract":
+        return replace(base, error=f"Unsupported OCR engine: {engine}")
+
+    try:
+        import pytesseract
+    except ImportError as exc:
+        return replace(base, error=f"ImportError: {exc}")
+
+    pytesseract.pytesseract.tesseract_cmd = command
+    try:
+        version = str(pytesseract.get_tesseract_version())
+    except Exception as exc:  # noqa: BLE001
+        return replace(base, error=f"{type(exc).__name__}: {exc}")
+
+    try:
+        languages = sorted(pytesseract.get_languages(config=""))
+    except Exception as exc:  # noqa: BLE001
+        return replace(base, version=version, error=f"{type(exc).__name__}: {exc}")
+
+    missing = [name for name in requested_languages(language) if name not in languages]
+    if missing:
+        error = f"Missing Tesseract language data: {', '.join(missing)}"
+    else:
+        error = None
+    return replace(
+        base,
+        available=not missing,
+        version=version,
+        languages=languages,
+        missing_languages=missing,
+        error=error,
+    )
+
+
+def build_ocr_provider(
+    enabled: bool,
+    engine: str,
+    *,
+    tesseract_cmd: str = "tesseract",
+) -> OCRProvider | None:
     """Build the configured provider without making OCR availability mandatory."""
 
     if not enabled:
         return None
     if engine.lower() == "tesseract":
-        return TesseractOCRProvider()
+        return TesseractOCRProvider(tesseract_cmd)
     raise ValueError(f"Unsupported OCR engine: {engine}")

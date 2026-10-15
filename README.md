@@ -452,7 +452,7 @@ python -m pip install -e ".[dev]"
 cp .env.example .env
 ```
 
-`.env.example` 中冻结的 17 个 `EDURAGE_*` 键是运行契约，不应改名或删除；生产环境必须替换其中的密钥占位值。开发与验收命令统一使用 `python -m pip`、`python -m pytest`、`python -m ruff`，避免 PATH 指向不同解释器。
+`.env.example` 中冻结的 39 个 `EDURAGE_*` 键是运行契约，不应改名或删除；生产环境必须替换其中的密钥占位值。开发与验收命令统一使用 `python -m pip`、`python -m pytest`、`python -m ruff`，避免 PATH 指向不同解释器。
 
 ## 本地启动 / Docker Compose 启动
 
