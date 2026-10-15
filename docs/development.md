@@ -13,6 +13,20 @@ dependencies, and start the application with reload enabled.
 Runtime document parsing dependencies include PyMuPDF for PDF text extraction and
 python-pptx for lightweight PPTX slide text extraction.
 
+Selective OCR is disabled by default. To enable the local Tesseract adapter,
+install the optional Python dependencies and the Tesseract binary separately:
+
+```powershell
+python -m pip install -e ".[dev,ocr]"
+```
+
+The Tesseract executable must be available on `PATH`. Chinese OCR also requires
+the matching `chi_sim` trained data in the Tesseract `tessdata` directory;
+`chi_sim+eng` is the default language setting. If Tesseract or its language data
+is unavailable, OCR is reported as a fallback condition and ordinary PDF text
+ingestion continues. Automated tests use a fake provider and do not access the
+network. Real-engine checks are integration-only and skipped by default.
+
 PowerShell:
 
 ```powershell
@@ -146,6 +160,15 @@ files, and API keys must not be committed. DeepSeek and DashScope keys must
 never be written to logs. Live cloud calls are optional and must use sanitized
 output only.
 
+## ED-03 Hybrid Retrieval
+
+`HybridRetriever` composes the existing Qdrant `Retriever` with an injectable
+keyword retriever and deterministic reranker. Its default local keyword matcher
+scores vector candidates without network access. A separate keyword backend can
+be injected to add candidates from another local index. Candidate retrieval
+defaults to 20 before the requested `top_k` is returned; weights default to
+0.6 vector and 0.4 keyword. Existing page and document metadata is retained.
+
 ## Known Issues
 
 ### Starlette/httpx third-party deprecation warning
@@ -177,5 +200,6 @@ summary. Do not turn a failed live call into a passing result.
 ### ED-02 scope note
 
 ED-02 supports lightweight text and table extraction from PDF/PPTX with
-page/slide-level citations. Images, audio, animations, and embedded objects are
-currently not parsed.
+page/slide-level citations. ED-03-01 adds selective OCR for image-heavy PDF
+pages; image OCR remains dependent on local Tesseract installation and language
+data.

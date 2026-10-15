@@ -11,9 +11,9 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from edurage.core.config import get_settings
-from edurage.ingest.chunker import chunk_pages
 from edurage.ingest.document_parser import detect_file_type, parse_document
 from edurage.ingest.embedder import HashingEmbedder
+from edurage.ingest.structured_chunker import structured_chunk_pages
 
 
 def preview_document(path: Path) -> tuple[str, int, int, Counter[int]]:
@@ -22,7 +22,7 @@ def preview_document(path: Path) -> tuple[str, int, int, Counter[int]]:
     file_type = detect_file_type(path)
     pages = parse_document(path)
     settings = get_settings()
-    chunks = chunk_pages(
+    chunks = structured_chunk_pages(
         pages,
         chunk_size=settings.chunk_size,
         overlap=settings.chunk_overlap,
