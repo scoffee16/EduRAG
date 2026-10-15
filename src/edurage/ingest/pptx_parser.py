@@ -53,12 +53,8 @@ def _shape_text_parts(shape: object) -> list[str]:
             parts.append(text)
     if getattr(shape, "has_table", False):
         for row in shape.table.rows:
-            row_text = "\t".join(
-                text
-                for cell in row.cells
-                if (text := _text_frame_text(cell.text_frame))
-            )
-            if row_text:
+            row_text = "\t".join(_text_frame_text(cell.text_frame) for cell in row.cells)
+            if row_text.strip():
                 parts.append(row_text)
     return parts
 

@@ -5,9 +5,9 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Literal, NotRequired, TypedDict
 
-from edurage.core.config import Settings
+from edurage.core.config import Settings, get_settings
 from edurage.ingest.ocr import OCRProvider, build_ocr_provider
-from edurage.ingest.pdf_parser import parse_pdf
+from edurage.ingest.pdf_parser import TextSegment, parse_pdf
 from edurage.ingest.pptx_parser import parse_pptx
 
 
@@ -20,6 +20,8 @@ class ParsedDocumentPage(TypedDict):
     text_sources: NotRequired[list[str]]
     ocr_confidence: NotRequired[float | None]
     ocr_error: NotRequired[str | None]
+    text_segments: NotRequired[list[TextSegment]]
+    page_used_ocr: NotRequired[bool]
 
 
 def detect_file_type(path: str | Path) -> Literal["pdf", "pptx"]:
@@ -39,11 +41,14 @@ def parse_document(
     settings: Settings | None = None,
     ocr_provider: OCRProvider | None = None,
 ) -> list[ParsedDocumentPage]:
-    """Parse a supported document into page-compatible text records."""
+    """Parse using application settings, also for callers such as the dry-run CLIs."""
 
     document_path = Path(path)
     file_type = detect_file_type(document_path)
     if file_type == "pdf":
+        # Provider-only callers keep their existing opt-in behavior.
+        if settings is None and ocr_provider is None:
+            settings = get_settings()
         if settings is None:
             pages = (
                 parse_pdf(document_path, ocr_provider=ocr_provider)
@@ -72,6 +77,10 @@ def parse_document(
     result: list[ParsedDocumentPage] = []
     for page in pages:
         normalized = dict(page, source_type=file_type)
+        normalized.setdefault(
+            "page_used_ocr",
+            "ocr" in (page.get("text_sources") or []) or bool(page.get("ocr_error")),
+        )
         if "text_sources" in page:
             normalized["text_sources"] = page["text_sources"]
             normalized["ocr_confidence"] = page.get("ocr_confidence")
