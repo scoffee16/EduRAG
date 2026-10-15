@@ -48,3 +48,26 @@ def test_citations_sort_deduplicate_and_truncate() -> None:
     assert citations[0]["file_type"] == "pdf"
     assert citations[1]["page"] == "7"
     assert citations[1]["file_type"] == "pptx"
+
+
+def test_citations_project_new_source_metadata_and_legacy_payload_stays_compatible() -> None:
+    citations = build_citations(
+        [
+            {
+                "score": 0.8,
+                "payload": {
+                    "document_id": "doc-1",
+                    "page": 2,
+                    "text": "证据",
+                    "page_used_ocr": True,
+                    "block_type": "table",
+                    "text_sources": ["text", "ocr"],
+                }
+            },
+            {"score": 0.7, "payload": {"document_id": "doc-2", "page": 1, "text": "旧字段"}},
+        ]
+    )
+    assert citations[0]["page_used_ocr"] is True
+    assert citations[0]["block_type"] == "table"
+    assert citations[0]["text_sources"] == ["text", "ocr"]
+    assert "page_used_ocr" not in citations[1]
