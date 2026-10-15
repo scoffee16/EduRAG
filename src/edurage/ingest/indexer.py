@@ -97,20 +97,32 @@ class IngestIndexer:
             tesseract_cmd=self.settings.ocr_tesseract_cmd,
         )
 
-    def ingest_pdf(self, path: str | Path, course_code: str) -> dict[str, Any]:
+    def ingest_pdf(
+        self, path: str | Path, course_code: str, *, original_filename: str | None = None
+    ) -> dict[str, Any]:
         """Parse, chunk, embed, and persist a PDF, compensating partial writes on error."""
 
-        return self._ingest_document(path, course_code, expected_file_type="pdf")
+        return self._ingest_document(
+            path, course_code, expected_file_type="pdf", original_filename=original_filename
+        )
 
-    def ingest_pptx(self, path: str | Path, course_code: str) -> dict[str, Any]:
+    def ingest_pptx(
+        self, path: str | Path, course_code: str, *, original_filename: str | None = None
+    ) -> dict[str, Any]:
         """Parse, chunk, embed, and persist a PPTX deck."""
 
-        return self._ingest_document(path, course_code, expected_file_type="pptx")
+        return self._ingest_document(
+            path, course_code, expected_file_type="pptx", original_filename=original_filename
+        )
 
-    def ingest_document(self, path: str | Path, course_code: str) -> dict[str, Any]:
+    def ingest_document(
+        self, path: str | Path, course_code: str, *, original_filename: str | None = None
+    ) -> dict[str, Any]:
         """Parse, chunk, embed, and persist a supported document."""
 
-        return self._ingest_document(path, course_code, expected_file_type=None)
+        return self._ingest_document(
+            path, course_code, expected_file_type=None, original_filename=original_filename
+        )
 
     def _ingest_document(
         self,
@@ -118,8 +130,14 @@ class IngestIndexer:
         course_code: str,
         *,
         expected_file_type: str | None,
+        original_filename: str | None,
     ) -> dict[str, Any]:
         document_path = Path(path)
+        filename = (
+            document_path.name
+            if original_filename is None
+            else _original_basename(original_filename)
+        )
         file_type = detect_file_type(document_path)
         if expected_file_type is not None and file_type != expected_file_type:
             expected = expected_file_type.upper()
@@ -132,7 +150,7 @@ class IngestIndexer:
         )
         ocr_summary = _log_ocr_outcome(
             pages,
-            filename=document_path.name,
+            filename=filename,
             enabled=self.settings.ocr_enabled,
         )
         chunks = structured_chunk_pages(
@@ -151,7 +169,7 @@ class IngestIndexer:
                 )
 
         document_id = str(uuid.uuid4())
-        object_key = f"{course_code}/{document_id}/{document_path.name}"
+        object_key = f"{course_code}/{document_id}/{filename}"
         object_written = False
         vectors_written = False
         relational_started = False
@@ -182,7 +200,7 @@ class IngestIndexer:
                 payload = {
                     "document_id": document_id,
                     "course_code": course_code,
-                    "filename": document_path.name,
+                    "filename": filename,
                     "page": chunk["page"],
                     "chunk_index": chunk["chunk_index"],
                     "modality": chunk["modality"],
@@ -192,6 +210,7 @@ class IngestIndexer:
                     "section": chunk["section"],
                     "source": chunk["source_type"],
                     "text_sources": chunk["text_sources"],
+                    "page_used_ocr": chunk["page_used_ocr"],
                     "ocr_confidence": chunk["ocr_confidence"],
                     "ocr_error": chunk["ocr_error"],
                 }
@@ -206,6 +225,7 @@ class IngestIndexer:
                         "modality": chunk["modality"],
                         "embedding": vector,
                         "metadata": {
+                            "filename": filename,
                             "page": chunk["page"],
                             "chunk_index": chunk["chunk_index"],
                             "file_type": file_type,
@@ -213,6 +233,7 @@ class IngestIndexer:
                             "section": chunk["section"],
                             "source": chunk["source_type"],
                             "text_sources": chunk["text_sources"],
+                            "page_used_ocr": chunk["page_used_ocr"],
                             "ocr_confidence": chunk["ocr_confidence"],
                             "ocr_error": chunk["ocr_error"],
                         },
@@ -228,7 +249,7 @@ class IngestIndexer:
                 {
                     "id": document_id,
                     "course_code": course_code,
-                    "filename": document_path.name,
+                    "filename": filename,
                     "file_type": file_type,
                     "storage_path": object_key,
                     "metadata": {"pages": len(pages), "chunks": len(chunks)},
@@ -397,7 +418,10 @@ def _log_ocr_outcome(
 ) -> dict[str, int]:
     """Report whether selective OCR actually ran, so silent fallback stays visible."""
 
-    ocr_pages = [page for page in pages if "ocr" in (page.get("text_sources") or [])]
+    ocr_pages = [
+        page for page in pages
+        if page.get("page_used_ocr", "ocr" in (page.get("text_sources") or []))
+    ]
     failed_pages = [page for page in pages if page.get("ocr_error")]
     if not enabled:
         logger.info("OCR disabled; parsed %s from embedded text only", filename)
@@ -411,12 +435,12 @@ def _log_ocr_outcome(
         )
     elif not ocr_pages:
         logger.info(
-            "OCR enabled but unused for %s: every page already had enough embedded text",
+            "OCR enabled but unused for %s: no page met selective OCR conditions",
             filename,
         )
     else:
         logger.info(
-            "OCR produced text for %d of %d page(s) of %s",
+            "OCR ran on %d of %d page(s) of %s",
             len(ocr_pages),
             len(pages),
             filename,
@@ -427,3 +451,17 @@ def _log_ocr_outcome(
 def _best_effort(cleanup: Any) -> None:
     with suppress(Exception):
         cleanup()
+
+
+def _original_basename(filename: str) -> str:
+    """Accept browser or Windows paths while keeping only a usable object basename."""
+
+    basename = filename.replace("\\", "/").rsplit("/", 1)[-1]
+    basename = "".join(
+        "_" if char in '<>:"|?*' else char
+        for char in basename
+        if ord(char) >= 32 and ord(char) != 127
+    ).strip().rstrip(". ")
+    if not basename or basename in {".", ".."}:
+        raise ValueError("original_filename must contain a usable basename")
+    return basename

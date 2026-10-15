@@ -48,6 +48,7 @@ def test_sufficient_text_page_does_not_call_ocr(tmp_path: Path) -> None:
 
     assert provider.calls == []
     assert pages[0]["text_sources"] == ["text"]
+    assert pages[0]["page_used_ocr"] is False
 
 
 def test_fake_ocr_adds_text_and_preserves_one_based_page_numbers(tmp_path: Path) -> None:
@@ -65,6 +66,7 @@ def test_fake_ocr_adds_text_and_preserves_one_based_page_numbers(tmp_path: Path)
     assert [page["text"] for page in pages] == ["微地址 101", "微地址 101"]
     assert all(page["text_sources"] == ["ocr"] for page in pages)
     assert all(page["ocr_confidence"] == 0.91 for page in pages)
+    assert all(page["page_used_ocr"] is True for page in pages)
     assert provider.calls == [(1, "eng"), (2, "eng")]
 
 
@@ -95,3 +97,4 @@ def test_ocr_failure_falls_back_to_original_text(tmp_path: Path) -> None:
     assert pages[0]["text_sources"] == ["text"]
     assert pages[0]["ocr_confidence"] is None
     assert pages[0]["ocr_error"] == "RuntimeError: fake OCR failure"
+    assert pages[0]["page_used_ocr"] is True
