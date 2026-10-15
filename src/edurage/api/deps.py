@@ -11,7 +11,7 @@ from edurage.db.repository import SqlAlchemyDocumentRepository
 from edurage.ingest.embedder import OpenAIEmbedder
 from edurage.ingest.indexer import IngestIndexer, create_default_indexer
 from edurage.rag.answerer import Answerer
-from edurage.rag.hybrid_retriever import HybridRetriever
+from edurage.rag.hybrid_retriever import build_hybrid_retriever
 from edurage.rag.retriever import Retriever
 from edurage.rag.service import answer_question
 from edurage.storage.minio_client import MinioObjectStore, get_minio_client
@@ -45,7 +45,7 @@ class RAGService:
             get_qdrant_client(settings),
             collection_name=settings.qdrant_collection,
         )
-        self.retriever = HybridRetriever(vector_retriever)
+        self.retriever = build_hybrid_retriever(vector_retriever, settings)
         self.answerer = Answerer(settings=settings)
 
     def answer_question(

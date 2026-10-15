@@ -63,6 +63,54 @@ def test_pdf_upload_returns_created_response(
     assert fake_indexer.calls[0][1] == "CS-DEMO"
 
 
+class DocumentIndexer:
+    def __init__(self) -> None:
+        self.calls: list[tuple[Path, str, str]] = []
+
+    def ingest_document(
+        self, path: Path, course_code: str, *, original_filename: str
+    ) -> dict[str, Any]:
+        self.calls.append((path, course_code, original_filename))
+        assert path.exists()
+        return {"document_id": "doc-pptx", "pages": 2, "chunks": 3, "status": "indexed"}
+
+
+def test_pptx_upload_uses_document_ingest_and_sanitizes_basename(client: TestClient) -> None:
+    indexer = DocumentIndexer()
+    _client_with_upload_overrides(client, indexer)
+
+    response = client.post(
+        "/api/v1/upload",
+        files={
+            "file": (
+                r"C:\fake\课程\slides.pptx",
+                b"PK\x03\x04pptx",
+                "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+            )
+        },
+    )
+
+    assert response.status_code == 201
+    assert response.json()["filename"] == "slides.pptx"
+    assert indexer.calls[0][2] == "slides.pptx"
+    assert not indexer.calls[0][0].exists()
+
+
+def test_upload_rejects_mismatched_mime_and_signature(client: TestClient) -> None:
+    indexer = DocumentIndexer()
+    _client_with_upload_overrides(client, indexer)
+
+    response = client.post(
+        "/api/v1/upload",
+        files={"file": ("slides.pptx", b"not-a-zip", "application/pdf")},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "mime_mismatch"
+    assert response.json()["request_id"] == response.headers["x-request-id"]
+    assert indexer.calls == []
+
+
 def test_non_pdf_upload_returns_bad_request(client: TestClient) -> None:
     fake_indexer = FakeIndexer()
     _client_with_upload_overrides(client, fake_indexer)
