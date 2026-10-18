@@ -82,9 +82,19 @@ class Citation(BaseModel):
     text_sources: list[str] | None = None
 
 
+class WebSearchResult(BaseModel):
+    """One public web search result backing a non-course answer."""
+
+    title: str
+    url: str
+    snippet: str = ""
+
+
 class QueryResponse(BaseModel):
     answer: str
     citations: list[Citation]
+    knowledge_sources: list[str] = []
+    web_results: list[WebSearchResult] = []
     model: str
     latency_ms: float
     request_id: str

@@ -7,7 +7,14 @@ from typing import Any, Protocol
 
 from edurage.core.config import Settings, get_settings
 from edurage.llm.client import create_chat_completion, get_llm_client
-from edurage.rag.prompt import SYSTEM_PROMPT, build_user_prompt
+from edurage.rag.prompt import (
+    GENERAL_SYSTEM_PROMPT,
+    SYSTEM_PROMPT,
+    WEB_SEARCH_SYSTEM_PROMPT,
+    build_general_prompt,
+    build_user_prompt,
+    build_web_prompt,
+)
 
 
 class ChatCompletions(Protocol):
@@ -44,15 +51,30 @@ class Answerer:
         self.settings = settings or get_settings()
         self.client = client or get_llm_client(self.settings)
 
-    def answer(self, question: str, hits: list[Mapping[str, Any]]) -> str:
+    def _complete(self, system_prompt: str, user_prompt: str) -> str:
         response = create_chat_completion(
             self.client,
             model=self.settings.llm_model,
             messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": build_user_prompt(question, hits)},
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
             ],
         )
         return _message_content(response)
+
+    def answer(self, question: str, hits: list[Mapping[str, Any]]) -> str:
+        """Answer from retrieved course-material fragments."""
+
+        return self._complete(SYSTEM_PROMPT, build_user_prompt(question, hits))
+
+    def answer_from_web(self, question: str, results: list[Mapping[str, Any]]) -> str:
+        """Answer from public web search results when no course fragment matched."""
+
+        return self._complete(WEB_SEARCH_SYSTEM_PROMPT, build_web_prompt(question, results))
+
+    def answer_from_general(self, question: str) -> str:
+        """Answer from the model's own general knowledge as a last resort."""
+
+        return self._complete(GENERAL_SYSTEM_PROMPT, build_general_prompt(question))
 
     __call__ = answer

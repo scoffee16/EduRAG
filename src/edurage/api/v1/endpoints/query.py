@@ -36,6 +36,8 @@ def query(
     response = QueryResponse(
         answer=str(result["answer"]),
         citations=result.get("citations", []),
+        knowledge_sources=result.get("knowledge_sources", []),
+        web_results=result.get("web_results", []),
         model=str(result["model"]),
         latency_ms=float(result.get("latency_ms", 0.0)),
         request_id=http_request.state.request_id,

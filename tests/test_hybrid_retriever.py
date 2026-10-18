@@ -7,7 +7,6 @@ from edurage.rag.hybrid_retriever import (
     QdrantKeywordCandidateSource,
     build_hybrid_retriever,
 )
-from edurage.rag.prompt import NO_EVIDENCE_ANSWER
 from edurage.rag.service import answer_question
 
 
@@ -116,14 +115,17 @@ def test_top_k_limits_after_fusion_and_document_id_requires_course() -> None:
         raise AssertionError("document_id without course_code must fail")
 
 
-def test_empty_results_keep_existing_refusal_without_external_calls() -> None:
+def test_empty_results_fall_back_to_model_general_knowledge() -> None:
     hybrid = HybridRetriever(FakeVectorRetriever([]))
 
     class FakeLLM:
         settings = type("Settings", (), {"llm_model": "offline"})()
 
         def answer(self, question: str, hits: list[dict[str, Any]]) -> str:
-            raise AssertionError("LLM must not run without evidence")
+            raise AssertionError("course-grounded LLM must not run without evidence")
+
+        def answer_from_general(self, question: str) -> str:
+            return "通用知识回答。"
 
     result = answer_question(
         "ADD 微地址",
@@ -132,8 +134,10 @@ def test_empty_results_keep_existing_refusal_without_external_calls() -> None:
         llm=FakeLLM(),
     )
 
-    assert result["answer"] == NO_EVIDENCE_ANSWER
+    assert result["knowledge_sources"] == ["model_knowledge"]
     assert result["citations"] == []
+    assert result["answer"].startswith("> 知识来源：模型通用知识")
+    assert result["answer"].endswith("通用知识回答。")
 
 
 class FakeScrollClient:

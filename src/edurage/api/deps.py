@@ -14,6 +14,7 @@ from edurage.rag.answerer import Answerer
 from edurage.rag.hybrid_retriever import build_hybrid_retriever
 from edurage.rag.retriever import Retriever
 from edurage.rag.service import answer_question
+from edurage.rag.web_search import create_web_search
 from edurage.storage.minio_client import MinioObjectStore, get_minio_client
 from edurage.vector.qdrant_client import QdrantDocumentStore, get_qdrant_client
 
@@ -38,7 +39,7 @@ def get_indexer() -> IngestIndexer:
 class RAGService:
     """Small adapter exposing the API-facing RAG service contract."""
 
-    def __init__(self, settings: Settings) -> None:
+    def __init__(self, settings: Settings, web_search: Any | None = None) -> None:
         self.settings = settings
         vector_retriever = Retriever(
             OpenAIEmbedder(settings=settings),
@@ -47,6 +48,7 @@ class RAGService:
         )
         self.retriever = build_hybrid_retriever(vector_retriever, settings)
         self.answerer = Answerer(settings=settings)
+        self.web_search = web_search or create_web_search()
 
     def answer_question(
         self,
@@ -63,6 +65,7 @@ class RAGService:
             retriever=self.retriever,
             llm=self.answerer,
             model=self.settings.llm_model,
+            web_search=self.web_search,
         )
 
 
