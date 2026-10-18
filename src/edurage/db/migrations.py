@@ -22,6 +22,7 @@ _COLUMN_MIGRATIONS: tuple[tuple[str, str], ...] = (
     ("course_packs", "description"),
     ("course_packs", "updated_at"),
     ("documents", "status"),
+    ("course_packs", "origin"),
 )
 
 _POSTGRESQL_STATEMENTS: dict[tuple[str, str], tuple[str, ...]] = {
@@ -33,6 +34,9 @@ _POSTGRESQL_STATEMENTS: dict[tuple[str, str], tuple[str, ...]] = {
     ),
     ("documents", "status"): (
         "ALTER TABLE documents ADD COLUMN status VARCHAR(32) NOT NULL DEFAULT 'indexed'",
+    ),
+    ("course_packs", "origin"): (
+        "ALTER TABLE course_packs ADD COLUMN origin VARCHAR(16) NOT NULL DEFAULT 'manual'",
     ),
 }
 
@@ -49,6 +53,9 @@ _SQLITE_STATEMENTS: dict[tuple[str, str], tuple[str, ...]] = {
     ("documents", "status"): (
         "ALTER TABLE documents ADD COLUMN status VARCHAR(32) NOT NULL DEFAULT 'indexed'",
     ),
+    ("course_packs", "origin"): (
+        "ALTER TABLE course_packs ADD COLUMN origin VARCHAR(16) NOT NULL DEFAULT 'manual'",
+    ),
 }
 
 # Conservative fallback for dialects without a dedicated statement set.
@@ -64,6 +71,9 @@ _GENERIC_STATEMENTS: dict[tuple[str, str], tuple[str, ...]] = {
     ),
     ("documents", "status"): (
         "ALTER TABLE documents ADD COLUMN status VARCHAR(32) NOT NULL DEFAULT 'indexed'",
+    ),
+    ("course_packs", "origin"): (
+        "ALTER TABLE course_packs ADD COLUMN origin VARCHAR(16) NOT NULL DEFAULT 'manual'",
     ),
 }
 

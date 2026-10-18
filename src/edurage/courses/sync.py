@@ -158,6 +158,7 @@ def _upsert_course_pack(session: Session, definition: CourseDefinition) -> str:
                 name=name,
                 description=description,
                 config=config,
+                origin="config",
                 updated_at=datetime.now(UTC),
             )
         )
@@ -167,12 +168,16 @@ def _upsert_course_pack(session: Session, definition: CourseDefinition) -> str:
         existing.name == name
         and existing.description == description
         and existing.config == config
+        and existing.origin == "config"
     ):
         return "unchanged"
 
     existing.name = name
     existing.description = description
     existing.config = config
+    # The YAML definition is authoritative: a row that shadowed a configured
+    # course must be reclaimed as config-managed when the sync owns it again.
+    existing.origin = "config"
     existing.updated_at = datetime.now(UTC)
     return "updated"
 

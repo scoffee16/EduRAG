@@ -13,6 +13,7 @@ def test_model_columns_and_constraints() -> None:
         "id",
         "name",
         "code",
+        "origin",
         "config",
         "created_at",
     }

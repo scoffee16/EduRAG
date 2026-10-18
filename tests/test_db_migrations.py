@@ -64,22 +64,24 @@ def test_ensure_schema_upgrades_legacy_database(tmp_path: Path) -> None:
             "course_packs.description",
             "course_packs.updated_at",
             "documents.status",
+            "course_packs.origin",
         ]
         assert ensure_schema(engine) == []
 
         inspector = inspect(engine)
         course_columns = {column["name"] for column in inspector.get_columns("course_packs")}
         document_columns = {column["name"] for column in inspector.get_columns("documents")}
-        assert {"description", "updated_at"} <= course_columns
+        assert {"description", "updated_at", "origin"} <= course_columns
         assert "status" in document_columns
 
         with engine.connect() as connection:
-            description, updated_at = connection.execute(
-                text("SELECT description, updated_at FROM course_packs")
+            description, updated_at, origin = connection.execute(
+                text("SELECT description, updated_at, origin FROM course_packs")
             ).one()
             status = connection.execute(text("SELECT status FROM documents")).scalar_one()
         assert description is None
         assert updated_at is not None
+        assert origin == "manual"
         assert status == "indexed"
 
         with Session(engine) as session:
@@ -87,6 +89,7 @@ def test_ensure_schema_upgrades_legacy_database(tmp_path: Path) -> None:
             assert pack.code == "CS-COMP-ORG"
             assert pack.description is None
             assert pack.updated_at is not None
+            assert pack.origin == "manual"
     finally:
         engine.dispose()
 
@@ -114,5 +117,30 @@ def test_ensure_schema_only_applies_missing_columns(tmp_path: Path) -> None:
 
         assert ensure_schema(engine) == ["documents.status"]
         assert ensure_schema(engine) == []
+    finally:
+        engine.dispose()
+
+
+def test_ensure_schema_restores_missing_origin_column(tmp_path: Path) -> None:
+    engine = create_engine(f"sqlite:///{(tmp_path / 'origin.db').as_posix()}")
+    try:
+        Base.metadata.create_all(engine)
+        with Session(engine) as session:
+            session.add(CoursePack(name="手工课程", code="CS-MANUAL", config={}, origin="manual"))
+            session.commit()
+        with engine.begin() as connection:
+            connection.execute(text("ALTER TABLE course_packs DROP COLUMN origin"))
+
+        assert "origin" not in {
+            column["name"] for column in inspect(engine).get_columns("course_packs")
+        }
+        assert ensure_schema(engine) == ["course_packs.origin"]
+        assert ensure_schema(engine) == []
+
+        with engine.connect() as connection:
+            origin = connection.execute(text("SELECT origin FROM course_packs")).scalar_one()
+        assert origin == "manual"
+        with Session(engine) as session:
+            assert session.scalars(select(CoursePack)).one().origin == "manual"
     finally:
         engine.dispose()

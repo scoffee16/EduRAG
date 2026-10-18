@@ -92,6 +92,7 @@ def test_sync_creates_course_packs_and_is_idempotent(tmp_path: Path) -> None:
     with factory() as session:
         rows = session.scalars(select(CoursePack).order_by(CoursePack.code)).all()
         assert [row.code for row in rows] == ["CS-ALGO", "CS-COMP-ORG"]
+        assert [row.origin for row in rows] == ["config", "config"]
         comp_org = rows[1]
         assert comp_org.name == "计算机组成原理"
         assert comp_org.description == "课程描述"
@@ -124,6 +125,33 @@ def test_sync_updates_changed_course_pack(tmp_path: Path) -> None:
         pack = session.scalars(select(CoursePack)).one()
         assert pack.name == "新课程名"
         assert pack.description == "新描述"
+        assert pack.origin == "config"
+
+
+def test_sync_reclaims_manually_created_course_pack(tmp_path: Path) -> None:
+    factory = _session_factory()
+    with factory() as session:
+        session.add(
+            CoursePack(code="CS-COMP-ORG", name="手工课程", description="手工描述", config={})
+        )
+        session.commit()
+    with factory() as session:
+        assert session.scalars(select(CoursePack)).one().origin == "manual"
+
+    packs_dir = _course_pack_files(tmp_path)
+    _write_pack(packs_dir / "comp_org.yaml", _payload(code="CS-COMP-ORG", name="计算机组成原理"))
+    configs_dir = tmp_path / "configs"
+
+    first = sync_course_packs(factory, configs_dir)
+    assert first == {"created": 0, "updated": 1, "unchanged": 0, "skipped": 0, "total": 1}
+    second = sync_course_packs(factory, configs_dir)
+    assert second == {"created": 0, "updated": 0, "unchanged": 1, "skipped": 0, "total": 1}
+
+    with factory() as session:
+        pack = session.scalars(select(CoursePack)).one()
+        assert pack.origin == "config"
+        assert pack.name == "计算机组成原理"
+        assert pack.config["knowledge_graph"]["schema"] == "comp_org_schema.json"
 
 
 def test_sync_accepts_course_packs_directory_directly(tmp_path: Path) -> None:
@@ -135,7 +163,9 @@ def test_sync_accepts_course_packs_directory_directly(tmp_path: Path) -> None:
 
     assert counts["created"] == 1
     with factory() as session:
-        assert session.scalars(select(CoursePack)).one().code == "CS-COMP-ORG"
+        pack = session.scalars(select(CoursePack)).one()
+        assert pack.code == "CS-COMP-ORG"
+        assert pack.origin == "config"
 
 
 def test_sync_from_settings_uses_repository_configs() -> None:
@@ -156,6 +186,7 @@ def test_sync_from_settings_uses_repository_configs() -> None:
         ).one()
         assert pack.name == definition.name
         assert pack.description == definition.description
+        assert pack.origin == "config"
         assert pack.config["retrieval_config"]["text_weight"] == 0.4
         assert pack.config["knowledge_graph"]["schema"] == "comp_org_schema.json"
         assert pack.updated_at is not None
