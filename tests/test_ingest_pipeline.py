@@ -34,15 +34,71 @@ class FakeRepository:
     def __init__(self) -> None:
         self.documents: dict[str, dict[str, Any]] = {}
         self.chunks: list[Mapping[str, Any]] = []
+        self.progress_updates: list[dict[str, Any]] = []
+
+    def create_pending_document(
+        self,
+        *,
+        document_id: str,
+        course_code: str,
+        filename: str,
+        file_type: str,
+        storage_path: str,
+        metadata: Mapping[str, Any] | None = None,
+    ) -> str:
+        self.documents[document_id] = {
+            "id": document_id,
+            "document_id": document_id,
+            "course_code": course_code,
+            "filename": filename,
+            "file_type": file_type,
+            "storage_path": storage_path,
+            "status": "processing",
+            "metadata": dict(metadata or {})
+            | {
+                "status": "processing",
+                "progress": {"stage": "parse", "done": 0, "total": 0},
+            },
+        }
+        return document_id
+
+    def update_document_progress(
+        self, document_id: str, progress: Mapping[str, Any]
+    ) -> None:
+        record = self.documents[document_id]
+        record["metadata"]["progress"] = dict(progress)
+        self.progress_updates.append({"document_id": document_id, **dict(progress)})
 
     def insert_document(self, document: Mapping[str, Any]) -> None:
-        self.documents[str(document["id"])] = dict(document)
+        document_id = str(document["id"])
+        existing = self.documents.get(document_id)
+        record = dict(document)
+        if existing is not None:
+            record["metadata"] = dict(existing.get("metadata") or {}) | dict(
+                document.get("metadata") or {}
+            )
+        self.documents[document_id] = record
 
     def insert_chunks(self, chunks: Sequence[Mapping[str, Any]]) -> None:
         self.chunks.extend(chunks)
 
-    def set_document_status(self, document_id: str, status: str) -> None:
-        self.documents[document_id]["status"] = status
+    def set_document_status(
+        self,
+        document_id: str,
+        status: str,
+        *,
+        error_code: str | None = None,
+        metadata_patch: Mapping[str, Any] | None = None,
+    ) -> None:
+        document = self.documents[document_id]
+        metadata = dict(document.get("metadata") or {})
+        if metadata_patch:
+            metadata.update(dict(metadata_patch))
+        metadata["status"] = status
+        if error_code is not None:
+            metadata["error_code"] = error_code
+        document["status"] = status
+        document["metadata"] = metadata
 
     def delete_document(self, document_id: str) -> None:
         self.documents.pop(document_id, None)

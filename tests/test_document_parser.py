@@ -43,9 +43,35 @@ def test_document_parser_dispatches_pptx_to_pptx_parser(monkeypatch: pytest.Monk
     ]
 
 
+def test_document_parser_dispatches_docx_to_docx_parser(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[Path] = []
+
+    def fake_parse_docx(path: Path) -> list[dict[str, object]]:
+        calls.append(path)
+        return [{"page": 1, "text": "docx text", "text_sources": ["text"]}]
+
+    monkeypatch.setattr(document_parser, "parse_docx", fake_parse_docx)
+
+    pages = document_parser.parse_document(Path("demo.docx"))
+
+    assert calls == [Path("demo.docx")]
+    assert pages == [
+        {
+            "page": 1,
+            "text": "docx text",
+            "text_sources": ["text"],
+            "source_type": "docx",
+            "page_used_ocr": False,
+            "ocr_confidence": None,
+        }
+    ]
+
+
 def test_document_parser_rejects_unsupported_extensions() -> None:
     with pytest.raises(ValueError, match="Unsupported document extension"):
-        document_parser.parse_document(Path("demo.docx"))
+        document_parser.parse_document(Path("demo.doc"))
 
 
 class FakeOCRProvider:

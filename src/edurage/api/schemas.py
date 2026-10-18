@@ -2,16 +2,39 @@
 
 from __future__ import annotations
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
-class UploadResponse(BaseModel):
+class UploadAcceptedResponse(BaseModel):
+    """Accepted async upload; clients poll the document detail endpoint."""
+
     document_id: str
     filename: str
-    pages: int
-    chunks: int
     course_code: str
+    status: str = "processing"
+
+
+class DocumentProgress(BaseModel):
+    """Live ingestion progress for a pending document."""
+
+    stage: str
+    done: int
+    total: int
+
+
+class DocumentDetailResponse(BaseModel):
+    """Document metadata plus ingestion status and progress."""
+
+    document_id: str
+    filename: str
+    course_code: str
+    file_type: str
     status: str
+    progress: DocumentProgress | None = None
+    error_code: str | None = None
+    page_count: int | None = None
+    chunk_count: int | None = None
+    created_at: str | None = None
 
 
 class QueryRequest(BaseModel):
@@ -19,6 +42,14 @@ class QueryRequest(BaseModel):
     course_code: str | None = "CS-COMP-ORG"
     document_id: str | None = None
     top_k: int | None = Field(default=None, ge=1)
+
+    @field_validator("course_code")
+    @classmethod
+    def normalize_course_code(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip().upper()
+        return normalized or None
 
     @model_validator(mode="after")
     def require_course_for_document(self) -> QueryRequest:

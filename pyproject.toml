@@ -18,6 +18,7 @@ dependencies = [
     "python-dotenv",
     "pymupdf",
     "python-pptx",
+    "python-docx>=1.1,<2",
     "openai>=1.40",
     "qdrant-client",
     "minio",

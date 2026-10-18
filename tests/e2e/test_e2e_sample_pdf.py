@@ -70,7 +70,7 @@ def test_sample_pdf_upload_and_query_are_offline(
         data={"course_code": "CS-COMP-ORG"},
     )
 
-    assert upload.status_code == 201
+    assert upload.status_code == 202
     document_id = upload.json()["document_id"]
 
     query = client.post(

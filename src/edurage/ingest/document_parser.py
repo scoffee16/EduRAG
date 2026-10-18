@@ -6,17 +6,18 @@ from pathlib import Path
 from typing import Literal, NotRequired, TypedDict
 
 from edurage.core.config import Settings, get_settings
+from edurage.ingest.docx_parser import parse_docx
 from edurage.ingest.ocr import OCRProvider, build_ocr_provider
 from edurage.ingest.pdf_parser import TextSegment, parse_pdf
 from edurage.ingest.pptx_parser import parse_pptx
 
 
 class ParsedDocumentPage(TypedDict):
-    """Text extracted from one document page or slide."""
+    """Text extracted from one document page, slide, or DOCX section."""
 
     page: int
     text: str
-    source_type: Literal["pdf", "pptx"]
+    source_type: Literal["pdf", "pptx", "docx"]
     text_sources: NotRequired[list[str]]
     ocr_confidence: NotRequired[float | None]
     ocr_error: NotRequired[str | None]
@@ -24,7 +25,7 @@ class ParsedDocumentPage(TypedDict):
     page_used_ocr: NotRequired[bool]
 
 
-def detect_file_type(path: str | Path) -> Literal["pdf", "pptx"]:
+def detect_file_type(path: str | Path) -> Literal["pdf", "pptx", "docx"]:
     """Return the supported ingestion file type for a path."""
 
     suffix = Path(path).suffix.lower()
@@ -32,6 +33,8 @@ def detect_file_type(path: str | Path) -> Literal["pdf", "pptx"]:
         return "pdf"
     if suffix == ".pptx":
         return "pptx"
+    if suffix == ".docx":
+        return "docx"
     raise ValueError(f"Unsupported document extension: {Path(path).suffix or '<none>'}")
 
 
@@ -72,6 +75,8 @@ def parse_document(
                 ocr_min_image_ratio=settings.ocr_min_image_ratio,
                 ocr_language=settings.ocr_language,
             )
+    elif file_type == "docx":
+        pages = parse_docx(document_path)
     else:
         pages = parse_pptx(document_path)
     result: list[ParsedDocumentPage] = []
