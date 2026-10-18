@@ -102,6 +102,30 @@ export interface QueryResponse {
   web_results?: WebSearchResult[]
 }
 
+/** 历史问答中限定的文档范围（空数组表示全课程检索）。 */
+export interface HistoryDocumentScope {
+  document_id: string
+  filename: string
+}
+
+/** 最近一次问答记录，对应 `GET /api/v1/history` 返回数组的元素。 */
+export interface HistoryItem {
+  history_id: string
+  course_code: string
+  course_name?: string | null
+  question: string
+  answer: string
+  document_scope: HistoryDocumentScope[]
+  citations: Citation[]
+  knowledge_sources?: KnowledgeSource[]
+  web_results?: WebSearchResult[]
+  model: string
+  latency_ms: number
+  request_id: string
+  /** ISO 时间字符串；后端已按倒序返回。 */
+  created_at: string
+}
+
 export interface OcrHealth {
   status: 'disabled' | 'ok' | 'unavailable' | string
   engine?: string
@@ -227,6 +251,12 @@ export async function askQuestion(body: QueryPayload, signal?: AbortSignal) {
       signal,
     }),
   )
+}
+
+/** 最近问答记录（后端按 created_at 倒序返回，默认最多 20 条）。 */
+export async function getHistory(limit = 20, signal?: AbortSignal) {
+  const query = limit > 0 ? `?limit=${encodeURIComponent(String(limit))}` : ''
+  return parseResponse<HistoryItem[]>(await fetch(`/api/v1/history${query}`, { signal }))
 }
 
 export async function getOcrHealth(signal?: AbortSignal) {

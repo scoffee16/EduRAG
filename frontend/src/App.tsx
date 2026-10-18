@@ -9,12 +9,14 @@ import {
   getCourses,
   getDocument,
   getDocuments,
+  getHistory,
   getOcrHealth,
   uploadDocument,
   type CourseSummary,
   type DocumentDetail,
   type DocumentProgress,
   type DocumentSummary,
+  type HistoryItem,
   type OcrHealth,
   type QueryResponse,
 } from './api'
@@ -22,6 +24,7 @@ import { fileExtension, formatClock } from './format'
 import AskPanel from './components/AskPanel'
 import CourseSelect from './components/CourseSelect'
 import DocumentList from './components/DocumentList'
+import HistoryPanel from './components/HistoryPanel'
 import StatusNotice, { type NoticeTone } from './components/StatusNotice'
 import UploadPanel, { type UploadPhase } from './components/UploadPanel'
 
@@ -118,6 +121,11 @@ export default function App({
   })
   const [answer, setAnswer] = useState<QueryResponse | null>(null)
 
+  // 历史问答（最近 20 条）：加载失败只在面板内提示，不打断主流程
+  const [history, setHistory] = useState<HistoryItem[]>([])
+  const [historyLoading, setHistoryLoading] = useState(true)
+  const [historyError, setHistoryError] = useState('')
+
   const listRequest = useRef<AbortController | null>(null)
   const queryRequest = useRef<AbortController | null>(null)
   const courseRef = useRef(courseCode)
@@ -205,10 +213,27 @@ export default function App({
     [clearRefreshNotice, refreshNoticeMs],
   )
 
-  // 首次挂载：课程列表 + OCR 状态
+  /** 加载最近问答记录；失败只在历史面板内提示，不打断问答/上传主流程。 */
+  const loadHistory = useCallback(async (signal?: AbortSignal) => {
+    setHistoryLoading(true)
+    setHistoryError('')
+    try {
+      const items = await getHistory(20, signal)
+      if (signal?.aborted) return
+      setHistory(items)
+    } catch (error) {
+      if ((error as Error).name === 'AbortError') return
+      setHistoryError(errorText(error))
+    } finally {
+      if (!signal?.aborted) setHistoryLoading(false)
+    }
+  }, [])
+
+  // 首次挂载：课程列表 + OCR 状态 + 历史问答
   useEffect(() => {
     const controller = new AbortController()
     void loadCourses()
+    void loadHistory(controller.signal)
     getOcrHealth(controller.signal)
       .then((data) => {
         setOcr(data)
@@ -222,7 +247,7 @@ export default function App({
       listRequest.current?.abort()
       queryRequest.current?.abort()
     }
-  }, [loadCourses])
+  }, [loadCourses, loadHistory])
 
   // 课程列表就绪后默认选中第一门课程；没有课程则进入手动新建模式
   const initializedCourse = useRef(false)
@@ -496,6 +521,8 @@ export default function App({
       if (!controller.signal.aborted) {
         setAnswer(result)
         setQueryState('success')
+        // 问答成功：后台刷新历史记录（失败不影响当前回答）
+        void loadHistory()
       }
     } catch (error) {
       if ((error as Error).name === 'AbortError') return
@@ -624,6 +651,7 @@ export default function App({
               answer={answer}
               onSubmit={(event) => void submitQuery(event)}
             />
+            <HistoryPanel items={history} loading={historyLoading} error={historyError} />
           </div>
 
           <aside className="side-column">

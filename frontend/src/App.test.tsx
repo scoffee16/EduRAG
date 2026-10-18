@@ -3,7 +3,7 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import userEvent from '@testing-library/user-event'
 import App from './App'
 import AnswerMarkdown, { sanitizeAnswerText } from './components/AnswerMarkdown'
-import type { CourseSummary, DocumentDetail, DocumentSummary } from './api'
+import type { CourseSummary, DocumentDetail, DocumentSummary, HistoryItem } from './api'
 
 /* -------------------------------------------------------------------------- */
 /*  测试数据                                                                   */
@@ -80,8 +80,60 @@ const DEFAULT_ANSWER = {
   web_results: [],
 }
 
+/** 历史问答记录：全课程检索（document_scope 为空数组）。 */
+const HISTORY_ALL_COURSE: HistoryItem = {
+  history_id: 'hist-1',
+  course_code: 'CS-COMP-ORG',
+  course_name: '计算机组成原理',
+  question: 'ADD 指令的微地址序列是什么？',
+  answer: '**历史答案**：ADD 指令分为取指、译码两步。',
+  document_scope: [],
+  citations: [
+    {
+      document_id: 'doc-1',
+      filename: '讲义.pdf',
+      file_type: 'pdf',
+      page: 2,
+      snippet: 'ADD 指令的微地址序列如下……',
+      score: 0.812,
+    },
+  ],
+  knowledge_sources: ['course_materials'],
+  web_results: [],
+  model: 'mock-model',
+  latency_ms: 34,
+  request_id: 'req-history-1',
+  created_at: '2026-10-15T08:30:00',
+}
+
+/** 历史问答记录：限定 2 篇文档，带联网来源。 */
+const HISTORY_LIMITED: HistoryItem = {
+  history_id: 'hist-2',
+  course_code: 'CS-COMP-ORG',
+  course_name: '计算机组成原理',
+  question: '这两份资料的重点是什么？',
+  answer: '**限定范围答案**：两篇文档的重点都在这。',
+  document_scope: [
+    { document_id: 'doc-1', filename: '讲义.pdf' },
+    { document_id: 'doc-2', filename: '课件.pptx' },
+  ],
+  citations: [],
+  knowledge_sources: [],
+  web_results: [
+    {
+      title: '指令周期 - 维基百科',
+      url: 'https://example.com/instruction-cycle',
+      snippet: '指令周期包含取指、译码、执行等阶段。',
+    },
+  ],
+  model: 'mock-model',
+  latency_ms: 52,
+  request_id: 'req-history-2',
+  created_at: '2026-10-15T09:00:00',
+}
+
 /* -------------------------------------------------------------------------- */
-/*  fetch 路由 mock：覆盖 /health/ocr、/courses、/documents、/upload、/query     */
+/*  fetch 路由 mock：覆盖 /health/ocr、/courses、/documents、/upload、/query、/history */
 /* -------------------------------------------------------------------------- */
 
 interface JsonInit {
@@ -125,6 +177,7 @@ interface MockHandlers {
   documentDetail?: (documentId: string) => Response | Promise<Response>
   deleteDocument?: (documentId: string) => Response | Promise<Response>
   query?: (body: QueryBody) => Response | Promise<Response>
+  history?: () => Response | Promise<Response>
   ocr?: () => Response | Promise<Response>
 }
 
@@ -206,6 +259,10 @@ function installFetch(handlers: MockHandlers = {}): MockServer {
     if (path.includes('/documents')) {
       const courseCode = parsed.searchParams.get('course_code') ?? ''
       return handlers.documents?.(courseCode) ?? json(courseDocuments(courseCode))
+    }
+
+    if (path.includes('/history')) {
+      return handlers.history?.() ?? json([])
     }
 
     if (path.includes('/query')) {
@@ -910,6 +967,130 @@ describe('EduRAG 前端工作流', () => {
     // 全课程模式两个文档限定字段都不发送
     expect(queryBody).not.toHaveProperty('document_ids')
     expect(queryBody).not.toHaveProperty('document_id')
+  })
+
+  it('历史问答为空时展示折叠面板与空状态提示', async () => {
+    installFetch()
+    render(<App />)
+
+    expect(await screen.findByTestId('history-panel')).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: /历史问答/ })).toBeInTheDocument()
+    expect(await screen.findByText('暂无历史问答，提问后会显示在这里')).toBeInTheDocument()
+    expect(screen.getByTestId('history-count')).toHaveTextContent('0')
+  })
+
+  it('历史问答默认折叠：显示时间/课程/问题/来源与范围 badge，答案和命中片段隐藏', async () => {
+    installFetch({ history: () => json([HISTORY_ALL_COURSE]) })
+    render(<App />)
+
+    const panel = await screen.findByTestId('history-panel')
+    expect(await within(panel).findByText('ADD 指令的微地址序列是什么？')).toBeInTheDocument()
+    expect(within(panel).getByText('10-15 08:30')).toBeInTheDocument()
+    expect(within(panel).getByText('计算机组成原理')).toBeInTheDocument()
+    expect(within(panel).getByText('全课程')).toBeInTheDocument()
+    expect(within(panel).getByText('课程资料')).toBeInTheDocument()
+    expect(screen.getByTestId('history-count')).toHaveTextContent('1')
+
+    const summary = within(panel).getByRole('button', {
+      name: /ADD 指令的微地址序列是什么/,
+    })
+    expect(summary).toHaveAttribute('aria-expanded', 'false')
+    expect(within(panel).queryByTestId('history-detail')).not.toBeInTheDocument()
+    expect(within(panel).queryByText('历史答案')).not.toBeInTheDocument()
+    expect(within(panel).queryByText(/ADD 指令的微地址序列如下/)).not.toBeInTheDocument()
+  })
+
+  it('展开历史问答：显示完整问题、Markdown 答案、命中片段与 request_id', async () => {
+    const user = userEvent.setup()
+    installFetch({ history: () => json([HISTORY_ALL_COURSE]) })
+    render(<App />)
+
+    const panel = await screen.findByTestId('history-panel')
+    const summary = await within(panel).findByRole('button', {
+      name: /ADD 指令的微地址序列是什么/,
+    })
+    await user.click(summary)
+
+    expect(summary).toHaveAttribute('aria-expanded', 'true')
+    const detail = within(panel).getByTestId('history-detail')
+    expect(within(detail).getByText('计算机组成原理（CS-COMP-ORG）')).toBeInTheDocument()
+    expect(within(detail).getByText('全课程：该课程全部文档')).toBeInTheDocument()
+    expect(within(detail).getByText('ADD 指令的微地址序列是什么？')).toBeInTheDocument()
+    expect(await within(detail).findByText('历史答案')).toBeInTheDocument()
+    expect(within(detail).getByText(/score 0\.812/)).toBeInTheDocument()
+    expect(within(detail).getByText('ADD 指令的微地址序列如下……')).toBeInTheDocument()
+    expect(within(detail).getByText('req-history-1')).toBeInTheDocument()
+    expect(within(detail).getByTestId('history-citations')).toBeInTheDocument()
+  })
+
+  it('限定文档的历史问答：展开后显示文件名与联网来源链接', async () => {
+    const user = userEvent.setup()
+    installFetch({ history: () => json([HISTORY_LIMITED]) })
+    render(<App />)
+
+    const panel = await screen.findByTestId('history-panel')
+    expect(await within(panel).findByText('限定 2 篇文档')).toBeInTheDocument()
+
+    await user.click(within(panel).getByRole('button', { name: /这两份资料的重点是什么/ }))
+    const detail = within(panel).getByTestId('history-detail')
+    expect(within(detail).getByTestId('history-scope-files')).toHaveTextContent(
+      '讲义.pdf、课件.pptx',
+    )
+
+    const link = within(detail).getByRole('link', { name: '指令周期 - 维基百科' })
+    expect(link).toHaveAttribute('href', 'https://example.com/instruction-cycle')
+    expect(link).toHaveAttribute('target', '_blank')
+    expect(link.getAttribute('rel')).toContain('noopener')
+    expect(within(detail).getByTestId('history-web-results')).toBeInTheDocument()
+    expect(within(detail).getByText(/取指、译码、执行/)).toBeInTheDocument()
+  })
+
+  it('问答成功后自动刷新历史记录', async () => {
+    const user = userEvent.setup()
+    let historyCalls = 0
+    installFetch({
+      history: () => {
+        historyCalls += 1
+        return json(historyCalls === 1 ? [] : [HISTORY_ALL_COURSE])
+      },
+    })
+    render(<App />)
+
+    const panel = await screen.findByTestId('history-panel')
+    expect(await within(panel).findByText('暂无历史问答，提问后会显示在这里')).toBeInTheDocument()
+
+    await user.type(screen.getByPlaceholderText(/ADD 指令/), 'ADD 指令是什么？')
+    await user.click(screen.getByRole('button', { name: '开始问答' }))
+    expect(await screen.findByText('重点')).toBeInTheDocument()
+
+    // 问答成功后重新请求 GET /api/v1/history，折叠行出现新记录
+    expect(
+      await within(panel).findByText('ADD 指令的微地址序列是什么？'),
+    ).toBeInTheDocument()
+    expect(screen.getByTestId('history-count')).toHaveTextContent('1')
+    expect(historyCalls).toBeGreaterThanOrEqual(2)
+  })
+
+  it('历史问答加载失败不打断主流程：面板提示错误，问答仍可用', async () => {
+    const user = userEvent.setup()
+    installFetch({
+      history: () =>
+        json(
+          { error: { code: 'history_unavailable', message: '历史服务不可用' } },
+          { status: 503 },
+        ),
+    })
+    render(<App />)
+
+    expect(await screen.findByText(/历史问答加载失败/)).toBeInTheDocument()
+    expect(screen.getByText(/历史服务不可用/)).toBeInTheDocument()
+
+    // 主流程不受影响：文档列表正常、问答仍可提交
+    expect(await screen.findByText('讲义.pdf')).toBeInTheDocument()
+    await user.type(screen.getByPlaceholderText(/ADD 指令/), '资源调度问题')
+    await user.click(screen.getByRole('button', { name: '开始问答' }))
+    expect(await screen.findByText('重点')).toBeInTheDocument()
+    expect(screen.getByTestId('scope-chip')).toHaveTextContent('全课程')
   })
 })
 

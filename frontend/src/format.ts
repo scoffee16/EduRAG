@@ -68,6 +68,15 @@ export function formatClock(date = new Date()): string {
   return `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`
 }
 
+/** 历史问答时间文案（MM-DD HH:MM）；缺失或无法解析时返回空串，由 UI 回退。 */
+export function formatShortDateTime(value?: string | null): string {
+  if (!value) return ''
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return ''
+  const pad = (part: number) => String(part).padStart(2, '0')
+  return `${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`
+}
+
 /** 进度百分比；无法计算（total 未知）时返回 null，UI 用不确定进度条。 */
 export function stagePercent(progress: DocumentProgress | null | undefined): number | null {
   if (!progress) return null

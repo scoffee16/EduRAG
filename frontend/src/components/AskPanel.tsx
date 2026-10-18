@@ -1,6 +1,7 @@
 import type { FormEvent } from 'react'
 import { ArrowRight, LoaderCircle, MessageSquare } from 'lucide-react'
 import type { QueryResponse } from '../api'
+import { resolveKnowledgeSources, SOURCE_CLASSES, SOURCE_LABELS } from '../sources'
 import AnswerMarkdown from './AnswerMarkdown'
 import CitationCard from './CitationCard'
 import StatusNotice from './StatusNotice'
@@ -18,19 +19,6 @@ interface AskPanelProps {
   queryError: { message: string; requestId?: string }
   answer: QueryResponse | null
   onSubmit: (event: FormEvent<HTMLFormElement>) => void
-}
-
-/** 知识来源的中文标签与样式后缀（course_materials / web_search / model_knowledge）。 */
-const SOURCE_LABELS: Record<string, string> = {
-  course_materials: '课程资料',
-  web_search: '联网搜索',
-  model_knowledge: '模型通用知识',
-}
-
-const SOURCE_CLASSES: Record<string, string> = {
-  course_materials: 'source-course',
-  web_search: 'source-web',
-  model_knowledge: 'source-model',
 }
 
 /** 列表里的外部网页摘要截断，避免长文本撑破卡片。 */
@@ -66,10 +54,7 @@ export default function AskPanel({
     selectedCount === 0
       ? '所有归属于该课程的文档都可被检索；想切换成限定文档模式，请点击您想限定的课程文档。'
       : `仅检索已选 ${selectedCount} 篇文档；再次点击已选文档可取消；也可在文档列表点「恢复全课程」退出限定模式。`
-  // 旧后端不返回 knowledge_sources 时，有引用即视为使用了课程资料
-  const knowledgeSources =
-    answer?.knowledge_sources ??
-    (answer && answer.citations.length > 0 ? ['course_materials'] : [])
+  const knowledgeSources = resolveKnowledgeSources(answer?.knowledge_sources, answer?.citations)
   const hasNonCourseSource = knowledgeSources.some(
     (source) => source !== 'course_materials',
   )
