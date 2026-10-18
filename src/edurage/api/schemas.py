@@ -135,3 +135,28 @@ class QueryResponse(BaseModel):
     model: str
     latency_ms: float
     request_id: str
+
+
+class HistoryDocumentScope(BaseModel):
+    """One document that limited a persisted answered question."""
+
+    document_id: str
+    filename: str = ""
+
+
+class QueryHistoryItem(BaseModel):
+    """One persisted answer returned by the history endpoint."""
+
+    history_id: str
+    course_code: str | None = None
+    course_name: str | None = None
+    question: str
+    answer: str
+    document_scope: list[HistoryDocumentScope] = []
+    citations: list[Citation] = []
+    knowledge_sources: list[str] = []
+    web_results: list[WebSearchResult] = []
+    model: str | None = None
+    latency_ms: float | None = None
+    request_id: str | None = None
+    created_at: str

@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID, uuid4
 
-from sqlalchemy import DateTime, ForeignKey, String, Text, UniqueConstraint, func
+from sqlalchemy import DateTime, Float, ForeignKey, String, Text, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 from sqlalchemy.types import JSON, Uuid
@@ -75,3 +75,33 @@ class Chunk(Base):
         "metadata", JSONType, nullable=False, default=dict
     )
     document: Mapped[Document] = relationship(back_populates="chunks")
+
+
+class QueryHistory(Base):
+    """One successfully answered question persisted for the history panel."""
+
+    __tablename__ = "query_history"
+
+    id: Mapped[UUID] = mapped_column(UUIDType, primary_key=True, default=uuid4)
+    course_code: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    course_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    question: Mapped[str] = mapped_column(Text, nullable=False)
+    answer: Mapped[str] = mapped_column(Text, nullable=False)
+    document_scope: Mapped[list[dict[str, Any]]] = mapped_column(
+        JSONType, nullable=False, default=list
+    )
+    citations: Mapped[list[dict[str, Any]]] = mapped_column(
+        JSONType, nullable=False, default=list
+    )
+    knowledge_sources: Mapped[list[str]] = mapped_column(
+        JSONType, nullable=False, default=list
+    )
+    web_results: Mapped[list[dict[str, Any]]] = mapped_column(
+        JSONType, nullable=False, default=list
+    )
+    model: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    latency_ms: Mapped[float | None] = mapped_column(Float, nullable=True)
+    request_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )

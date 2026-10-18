@@ -5,7 +5,12 @@ from typing import Any
 
 from fastapi.testclient import TestClient
 
-from edurage.api.deps import get_app_settings, get_indexer, get_rag_service
+from edurage.api.deps import (
+    get_app_settings,
+    get_indexer,
+    get_query_history_repository,
+    get_rag_service,
+)
 from edurage.core.config import Settings
 from edurage.ingest.embedder import HashingEmbedder
 from edurage.ingest.indexer import IngestIndexer
@@ -14,6 +19,7 @@ from tests.test_ingest_pipeline import (
     FakeRepository,
     FakeVectorStore,
 )
+from tests.test_query_api import FakeQueryHistoryRepository
 
 
 class OfflineRAGService:
@@ -63,6 +69,9 @@ def test_sample_pdf_upload_and_query_are_offline(
     client.app.dependency_overrides[get_app_settings] = lambda: settings
     client.app.dependency_overrides[get_indexer] = lambda: indexer
     client.app.dependency_overrides[get_rag_service] = lambda: rag_service
+    client.app.dependency_overrides[get_query_history_repository] = (
+        lambda: FakeQueryHistoryRepository()
+    )
 
     upload = client.post(
         "/api/v1/upload",

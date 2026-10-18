@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from functools import lru_cache
-from typing import Any
+from typing import Any, Protocol
 
 from edurage.core.config import Settings, get_settings
 from edurage.db.engine import get_session_factory
+from edurage.db.history import SqlAlchemyQueryHistoryRepository
 from edurage.db.repository import SqlAlchemyDocumentRepository
 from edurage.ingest.embedder import OpenAIEmbedder
 from edurage.ingest.indexer import IngestIndexer, create_default_indexer
@@ -80,6 +82,40 @@ def get_rag_service() -> RAGService:
     """Return the RAG service; override this dependency in offline tests."""
 
     return _default_rag_service()
+
+
+class QueryHistoryRepository(Protocol):
+    """Replaceable persistence boundary for answered-question history."""
+
+    def record(
+        self,
+        *,
+        question: str,
+        answer: str,
+        course_code: str | None = None,
+        document_ids: Sequence[str] | None = None,
+        citations: Sequence[Mapping[str, Any]] | None = None,
+        knowledge_sources: Sequence[str] | None = None,
+        web_results: Sequence[Mapping[str, Any]] | None = None,
+        model: str | None = None,
+        latency_ms: float | None = None,
+        request_id: str | None = None,
+    ) -> None: ...
+
+    def list_recent(
+        self, *, course_code: str | None = None, limit: int = 20
+    ) -> list[dict[str, Any]]: ...
+
+
+@lru_cache
+def _default_query_history_repository() -> QueryHistoryRepository:
+    return SqlAlchemyQueryHistoryRepository(get_session_factory(get_settings()))
+
+
+def get_query_history_repository() -> QueryHistoryRepository:
+    """Return the query-history repository; override this dependency in tests."""
+
+    return _default_query_history_repository()
 
 
 class DocumentLifecycleService:

@@ -5,7 +5,21 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
-from edurage.api.deps import get_rag_service
+from edurage.api.deps import get_query_history_repository, get_rag_service
+
+
+class FakeQueryHistoryRepository:
+    def __init__(self) -> None:
+        self.records: list[dict[str, Any]] = []
+
+    def record(self, **kwargs: Any) -> None:
+        self.records.append(kwargs)
+
+    def list_recent(
+        self, *, course_code: str | None = None, limit: int = 20
+    ) -> list[dict[str, Any]]:
+        del course_code, limit
+        return []
 
 
 class FakeRAGService:
@@ -39,6 +53,9 @@ def _ok_result() -> dict[str, Any]:
 
 def _install(client: TestClient, service: FakeRAGService) -> None:
     client.app.dependency_overrides[get_rag_service] = lambda: service
+    client.app.dependency_overrides[get_query_history_repository] = (
+        lambda: FakeQueryHistoryRepository()
+    )
 
 
 def test_query_returns_answer_citations_sources_and_request_id(client: TestClient) -> None:
