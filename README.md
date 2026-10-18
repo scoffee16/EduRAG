@@ -163,6 +163,7 @@ course_pack:
 
 ### 5.1 文档解析
 - **PDF/PPT**：使用 MinerU 提取文本、表格、图像、公式，保留版面结构。
+- **Word（.docx）**：使用 python-docx 提取段落与表格文本，按 Heading 样式切块，表格转为行列文本。
 - **图像**：使用 Qwen-VL 或 CLIP 生成多模态嵌入，识别电路图、流程图、波形图。
 - **表格**：结构化解析为 JSON，并生成自然语言摘要。
 - **代码**：使用 Tree-sitter 解析 AST，提取函数、模块、信号、端口。
@@ -263,23 +264,26 @@ course_pack:
 ## 9. 数据模型（核心表）
 
 ### 9.1 课程包表 `course_packs`
-| 字段       | 类型      | 说明       |
-| ---------- | --------- | ---------- |
-| id         | UUID      | 主键       |
-| name       | VARCHAR   | 课程名     |
-| code       | VARCHAR   | 课程代码   |
-| config     | JSONB     | 课程包配置 |
-| created_at | TIMESTAMP | 创建时间   |
+| 字段        | 类型        | 说明                       |
+| ----------- | ----------- | -------------------------- |
+| id          | UUID        | 主键                       |
+| name        | VARCHAR     | 课程名                     |
+| code        | VARCHAR     | 课程代码（唯一）           |
+| description | TEXT        | 课程描述（可空，回退配置） |
+| config      | JSONB       | 课程包配置                 |
+| created_at  | TIMESTAMP   | 创建时间                   |
+| updated_at  | TIMESTAMPTZ | 最近同步/更新时间          |
 
 ### 9.2 文档表 `documents`
-| 字段         | 类型    | 说明              |
-| ------------ | ------- | ----------------- |
-| id           | UUID    | 主键              |
-| course_id    | UUID    | 外键              |
-| filename     | VARCHAR | 文件名            |
-| file_type    | VARCHAR | pdf/pptx/vhdl/vcd |
-| storage_path | VARCHAR | MinIO 路径        |
-| metadata     | JSONB   | 元数据            |
+| 字段         | 类型    | 说明                                  |
+| ------------ | ------- | ------------------------------------- |
+| id           | UUID    | 主键                                  |
+| course_id    | UUID    | 外键                                  |
+| filename     | VARCHAR | 文件名                                |
+| file_type    | VARCHAR | pdf/pptx/docx/vhdl/vcd                |
+| storage_path | VARCHAR | MinIO 路径                            |
+| status       | VARCHAR | processing/indexed/failed（默认 indexed） |
+| metadata     | JSONB   | 元数据（进度、页数、块数、created_at） |
 
 ### 9.3 块表 `chunks`
 | 字段        | 类型    | 说明                       |
@@ -339,7 +343,7 @@ course_pack:
 ## 11. 实现路线图
 
 ### 第一阶段：MVP（1-2 周）
-- 支持 PDF/PPT 文本解析；
+- 支持 PDF/PPT/Word 文本解析；
 - 向量检索 + 基础问答；
 - 单一课程（计算机组成原理）；
 - Web 界面 + API。
@@ -658,3 +662,52 @@ curl.exe -X DELETE "http://127.0.0.1:8000/api/v1/documents/<DOCUMENT_ID>"
 | 三 slide PPTX dry-run | 通过，slide `[1,2,3]`、chunk 索引连续 |
 | 文档列表、删除和 `document_id` 过滤 | 通过，离线测试覆盖 |
 | Docker、真实 DeepSeek/DashScope 调用 | 未执行；未伪造结果 |
+
+## ED-03 课程接口、异步上传进度与 Word 支持
+
+ED-03 在 ED-02 基础上补齐课程发现、上传可观测性和 Word 文档支持：
+
+- **课程列表**：`GET /api/v1/courses` 返回课程名、描述、文档数/块数，供前端下拉选择；API 启动时把 `configs/course_packs/*.yaml` 幂等同步进 `course_packs` 表（name/description/config/updated_at），用新课程代码上传文档时自动创建课程行。
+- **异步上传**：`POST /api/v1/upload` 立即返回 `202` 与 `document_id`，解析/分块/embedding/写索引在后台执行；`GET /api/v1/documents/{document_id}` 返回 `status` 与 `progress`（parse/chunk/embed/store），失败时返回 `error_code`。
+- **Word**：支持 `.docx`（python-docx 解析段落+表格，按 Heading 切块，`page` 表示章节块序号）；`.doc` 需另存为 `.docx`。
+- **启动脚本**：`start_edurage.bat` 在 API 健康检查通过后自动打开「API 日志（后端 / LLM 请求）」与「基础设施日志」窗口；也可双击 `scripts/logs.bat` 随时查看容器日志。
+- **前端**：课程下拉实时切换文档列表；回答使用 Markdown + KaTeX 渲染；上传显示阶段进度条；布局调整为问答居中、上传/文档列表右侧 sticky。
+
+### ED-03 API 示例
+
+```powershell
+# 课程列表
+curl.exe http://127.0.0.1:8000/api/v1/courses
+
+# 上传（异步，返回 202）
+curl.exe -X POST http://127.0.0.1:8000/api/v1/upload `
+  -F "file=@sample.docx;type=application/vnd.openxmlformats-officedocument.wordprocessingml.document" `
+  -F "course_code=CS-COMP-ORG"
+
+# 轮询进度
+curl.exe http://127.0.0.1:8000/api/v1/documents/<DOCUMENT_ID>
+```
+
+数据库迁移：新增列通过 `scripts/init_db.py`（`Base.metadata.create_all()` 之后执行幂等 `ADD COLUMN` 迁移）与 API 启动 lifespan（best-effort）完成，兼容已有数据库，无需手写 SQL。
+
+### ED-03 验收结果
+
+全量回归（Windows 11 / Python 3.13 / Node 24 / Docker Desktop）：
+
+| 检查项 | 命令 | 结果 |
+| --- | --- | --- |
+| 后端静态检查 | `python -m ruff check .` | All checks passed |
+| 后端测试 | `python -m pytest -q` | 222 passed, 1 warning（第三方 pandas/numexpr 提示，与项目无关） |
+| 前端测试 | `cd frontend; npm run test` | 17 passed（`src/App.test.tsx`） |
+| 前端构建 | `cd frontend; npm run build` | 通过（`tsc -b && vite build`，gzip 188 kB） |
+| 容器健康 | `docker compose ps` | api/postgres/qdrant/minio 均 healthy |
+| 健康检查契约 | `GET /api/v1/health` | `{"status":"ok","service":"edurage","version":"0.0.1"}`（未变） |
+
+真实容器端到端（重建 `edurage-api:local` 后经 `http://127.0.0.1:8000` 验证）：
+
+- `GET /api/v1/courses` 返回 6 字段，含 `document_count`/`chunk_count` 聚合与 `updated_at`；启动日志显示 `course pack CS-COMP-ORG unchanged`（容器内已包含 `configs/`）。
+- PDF、PPTX、DOCX 三种样例上传均返回 `202 {document_id,filename,course_code,status:"processing"}`，轮询 `GET /api/v1/documents/{id}` 全部变为 `indexed`（3/3/2 chunks，`progress:null`、`error_code:null`）。
+- 中文提问返回 Markdown 列表 + `$$ ... $$` LaTeX 的答案与带 page 的引用（问题 3 的格式约定生效）。
+- 负向契约：`.doc` → 400 `unsupported_file_type`（提示另存 `.docx`）；伪造 PDF 魔数 → 400 `invalid_upload`；不存在的 document_id → 404 `not_found`（统一错误 envelope + `request_id`）。
+- `course_packs.description/updated_at` 与 `documents.status` 迁移在既有 dev 数据库上幂等执行，未丢数据（7 篇文档 / 405 chunks 不变）。
+- `start_edurage.bat` 在 `:health_ok` 之后打开「EduRAG API 日志（后端 / LLM 请求）」与「EduRAG 基础设施日志（Postgres / Qdrant / MinIO）」两个窗口（已用等价命令验证 `docker compose logs -f` 子进程可正常启动），文件保持 GBK + CRLF。

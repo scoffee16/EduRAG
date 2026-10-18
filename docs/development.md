@@ -10,8 +10,9 @@
 
 The development scripts create a local `.venv`, install the package with development
 dependencies, and start the application with reload enabled.
-Runtime document parsing dependencies include PyMuPDF for PDF text extraction and
-python-pptx for lightweight PPTX slide text extraction.
+Runtime document parsing dependencies include PyMuPDF for PDF text extraction,
+python-pptx for lightweight PPTX slide text extraction, and python-docx for
+Word (.docx) paragraph and table extraction.
 
 Selective OCR is disabled by default. To enable the local Tesseract adapter,
 install the optional Python dependencies and the Tesseract binary separately:
@@ -222,3 +223,21 @@ ED-02 supports lightweight text and table extraction from PDF/PPTX with
 page/slide-level citations. ED-03-01 adds selective OCR for image-heavy PDF
 pages; image OCR remains dependent on local Tesseract installation and language
 data.
+
+### ED-03 scope note
+
+ED-03 adds `.docx` ingestion (python-docx, heading-based chunking, 1-based
+section block numbers in `page`), an asynchronous upload contract, and course
+discovery:
+
+- `POST /api/v1/upload` returns `202 Accepted` with a `processing` document row;
+  parsing/embedding stay observable through `GET /api/v1/documents/{document_id}`
+  (`status`, `progress`, `error_code`). Update clients that assumed `201`.
+- `GET /api/v1/courses` lists course packs with document/chunk counts. Course
+  packs under `configs/course_packs/*.yaml` are synchronized into PostgreSQL at
+  API startup (best-effort, idempotent).
+- New columns (`course_packs.description`, `course_packs.updated_at`,
+  `documents.status`) are added by the idempotent migration in
+  `src/edurage/db/migrations.py`, which `scripts/init_db.py` and the API
+  lifespan both run; `Base.metadata.create_all()` alone does not alter existing
+  tables.
