@@ -82,21 +82,34 @@ export default function CourseSelect({
             </select>
             <ChevronDown size={14} className="select-chevron" aria-hidden="true" />
           </div>
-          {selectedCourse?.deletable === true && (
-            <button
-              type="button"
-              className="icon-button course-delete-button"
-              title="删除课程"
-              aria-label="删除课程"
-              onClick={onDeleteCourse}
-              disabled={deleting}
+          {selectedCourse && (
+            <span
+              className="course-delete-wrap"
+              title={
+                selectedCourse.deletable
+                  ? '删除课程'
+                  : '示例课程由配置文件同步生成，不能删除'
+              }
             >
-              {deleting ? (
-                <LoaderCircle size={15} className="spin" aria-hidden="true" />
-              ) : (
-                <Trash2 size={15} aria-hidden="true" />
-              )}
-            </button>
+              <button
+                type="button"
+                className={`icon-button course-delete-button ${selectedCourse.deletable ? '' : 'locked'}`.trim()}
+                title={
+                  selectedCourse.deletable
+                    ? '删除课程'
+                    : '示例课程由配置文件同步生成，不能删除'
+                }
+                aria-label="删除课程"
+                onClick={onDeleteCourse}
+                disabled={deleting || !selectedCourse.deletable}
+              >
+                {deleting ? (
+                  <LoaderCircle size={15} className="spin" aria-hidden="true" />
+                ) : (
+                  <Trash2 size={15} aria-hidden="true" />
+                )}
+              </button>
+            </span>
           )}
         </>
       )}

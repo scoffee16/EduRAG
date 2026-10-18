@@ -100,6 +100,7 @@ interface QueryBody {
   question: string
   course_code?: string
   document_id?: string
+  document_ids?: string[]
   top_k: number
 }
 
@@ -274,17 +275,24 @@ describe('EduRAG 前端工作流', () => {
       screen.getByRole('option', { name: '计算机组成原理（CS-COMP-ORG）· 2 篇文档' }),
     ).toBeInTheDocument()
     expect(server.count('/api/v1/documents?course_code=CS-COMP-ORG')).toBe(1)
+    // 全课程模式的使用说明：所有文档可检索 + 如何切换成限定模式
+    expect(screen.getByTestId('scope-help')).toHaveTextContent(
+      '所有归属于该课程的文档都可被检索；想切换成限定文档模式，请点击您想限定的课程文档。',
+    )
+    expect(screen.getByTestId('scope-chip')).toHaveTextContent('全课程')
   })
 
-  it('切换课程会重新加载文档、清空选中文档与上一次回答', async () => {
+  it('切换课程会重新加载文档、清空限定选择与上一次回答', async () => {
     const user = userEvent.setup()
     const server = installFetch()
     render(<App />)
 
     await screen.findByText('讲义.pdf')
     await user.click(screen.getByText('讲义.pdf'))
-    expect(screen.getByText(/单份文档/)).toBeInTheDocument()
+    expect(screen.getByTestId('scope-chip')).toHaveTextContent('限定 1 篇文档')
     expect(screen.getByText(/问答将限定在/)).toBeInTheDocument()
+    expect(screen.getByTestId('scope-help')).toHaveTextContent('仅检索已选 1 篇文档')
+    expect(screen.getByRole('button', { name: '恢复全课程' })).toBeInTheDocument()
 
     await user.type(screen.getByPlaceholderText(/ADD 指令/), '这个问题')
     await user.click(screen.getByRole('button', { name: '开始问答' }))
@@ -292,18 +300,22 @@ describe('EduRAG 前端工作流', () => {
     expect(await screen.findByText('重点')).toBeInTheDocument()
     expect(screen.getByText('req-answer-1')).toBeInTheDocument()
     const queryRequest = server.matching('/api/v1/query')[0]
-    expect(JSON.parse(String(queryRequest.body))).toMatchObject({
+    const queryBody = JSON.parse(String(queryRequest.body)) as QueryBody
+    expect(queryBody).toMatchObject({
       question: '这个问题',
       course_code: 'CS-COMP-ORG',
-      document_id: 'doc-1',
+      document_ids: ['doc-1'],
       top_k: 5,
     })
+    // 不再发送旧的单文档字段
+    expect(queryBody).not.toHaveProperty('document_id')
 
     await user.selectOptions(screen.getByLabelText('课程'), 'CS-OS')
 
     await waitFor(() => expect(screen.getByText(/全课程/)).toBeInTheDocument())
     expect(screen.queryByTestId('answer-markdown')).not.toBeInTheDocument()
     expect(screen.queryByText(/问答将限定在/)).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '恢复全课程' })).not.toBeInTheDocument()
     expect(await screen.findByText('该课程还没有文档')).toBeInTheDocument()
     expect(server.count('/api/v1/documents?course_code=CS-OS')).toBe(1)
   })
@@ -567,6 +579,12 @@ describe('EduRAG 前端工作流', () => {
     await screen.findByText('讲义.pdf')
     expect(screen.getByText('选择或拖入 PDF / PPTX / DOCX')).toBeInTheDocument()
     expect(uploadInput().accept).toContain('.docx')
+    // 解析能力说明：PDF 扫描页自动 OCR；PPTX / DOCX 仅解析文字段落
+    expect(screen.getByText('PDF 扫描页可自动 OCR（依赖 OCR 引擎）')).toBeInTheDocument()
+    expect(
+      screen.getByText('PPTX / DOCX 只解析文字段落，图片中的文字暂不识别'),
+    ).toBeInTheDocument()
+    expect(screen.queryByText('PPTX / DOCX 仅解析文本内容')).not.toBeInTheDocument()
 
     chooseFile(new File(['doc'], '旧讲义.doc', { type: 'application/msword' }))
     expect(await screen.findByText('暂不支持旧版 .doc')).toBeInTheDocument()
@@ -734,17 +752,29 @@ describe('EduRAG 前端工作流', () => {
     expect(screen.queryByText('讲义.pdf')).not.toBeInTheDocument()
   })
 
-  it('配置同步的课程不可删除：不展示删除课程按钮', async () => {
+  it('配置同步的课程不可删除：删除按钮禁用并说明原因', async () => {
     const user = userEvent.setup()
     installFetch()
     render(<App />)
 
     await screen.findByText('讲义.pdf')
-    expect(screen.queryByRole('button', { name: '删除课程' })).not.toBeInTheDocument()
+    const deleteButton = screen.getByRole('button', { name: '删除课程' })
+    expect(deleteButton).toBeDisabled()
+    expect(deleteButton).toHaveAttribute(
+      'title',
+      '示例课程由配置文件同步生成，不能删除',
+    )
+    expect(screen.getByTestId('config-course-note')).toHaveTextContent(
+      '示例课程由配置文件同步生成，不能删除',
+    )
 
     await user.selectOptions(screen.getByLabelText('课程'), 'CS-OS')
     expect(await screen.findByText('该课程还没有文档')).toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: '删除课程' })).not.toBeInTheDocument()
+    // 切换到另一门 config 课程：同样保留禁用的删除按钮与说明
+    expect(screen.getByRole('button', { name: '删除课程' })).toBeDisabled()
+    expect(screen.getByTestId('config-course-note')).toHaveTextContent(
+      '示例课程由配置文件同步生成，不能删除',
+    )
   })
 
   it('问答展示知识来源 badge、非课程资料警示与联网搜索来源', async () => {
@@ -784,6 +814,102 @@ describe('EduRAG 前端工作流', () => {
     expect(link).toHaveAttribute('target', '_blank')
     expect(link.getAttribute('rel')).toContain('noopener')
     expect(screen.getByText(/取指、译码、执行/)).toBeInTheDocument()
+  })
+
+  it('刷新文档列表成功后展示带时间的 transient 提示，并自动消失', async () => {
+    const user = userEvent.setup()
+    const server = installFetch()
+    // 缩短提示时长，验证「展示后自动消失」的行为
+    render(<App refreshNoticeMs={60} />)
+
+    await screen.findByText('讲义.pdf')
+    expect(screen.queryByText(/文档列表已刷新/)).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: '刷新文档列表' }))
+    const notice = await screen.findByText(/^文档列表已刷新（\d{2}:\d{2}:\d{2}）$/)
+    expect(notice).toHaveAttribute('aria-live', 'polite')
+    expect(server.count('/api/v1/documents?course_code=CS-COMP-ORG')).toBeGreaterThanOrEqual(2)
+
+    await waitFor(
+      () => expect(screen.queryByText(/文档列表已刷新/)).not.toBeInTheDocument(),
+      { timeout: 3000 },
+    )
+  })
+
+  it('文档列表不再有与刷新重复的「查询」按钮，刷新按钮提供无障碍名称', async () => {
+    installFetch()
+    render(<App />)
+
+    await screen.findByText('讲义.pdf')
+    expect(screen.getByRole('button', { name: '刷新文档列表' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /查询/ })).not.toBeInTheDocument()
+  })
+
+  it('限定模式支持多选：两篇文档的问答请求体携带 document_ids 数组', async () => {
+    const user = userEvent.setup()
+    const server = installFetch()
+    render(<App />)
+
+    await screen.findByText('讲义.pdf')
+    await user.click(screen.getByText('讲义.pdf'))
+    expect(screen.getByTestId('scope-chip')).toHaveTextContent('限定 1 篇文档')
+    await user.click(screen.getByText('课件.pptx'))
+    expect(screen.getByTestId('scope-chip')).toHaveTextContent('限定 2 篇文档')
+    expect(screen.getByTestId('selection-note')).toHaveTextContent('问答将限定在 2 篇文档')
+    expect(screen.getByText('已选 2')).toBeInTheDocument()
+
+    await user.type(screen.getByPlaceholderText(/ADD 指令/), '这两份资料的重点是什么？')
+    await user.click(screen.getByRole('button', { name: '开始问答' }))
+
+    expect(await screen.findByText('重点')).toBeInTheDocument()
+    const queryBody = JSON.parse(
+      String(server.matching('/api/v1/query')[0].body),
+    ) as QueryBody
+    expect(queryBody).toMatchObject({
+      question: '这两份资料的重点是什么？',
+      course_code: 'CS-COMP-ORG',
+      document_ids: ['doc-1', 'doc-2'],
+      top_k: 5,
+    })
+    expect(queryBody).not.toHaveProperty('document_id')
+  })
+
+  it('再次点击已选文档可取消限定，点「恢复全课程」退出限定模式', async () => {
+    const user = userEvent.setup()
+    const server = installFetch()
+    render(<App />)
+
+    await screen.findByText('讲义.pdf')
+    await user.click(screen.getByText('讲义.pdf'))
+    await user.click(screen.getByText('课件.pptx'))
+    expect(screen.getByTestId('scope-chip')).toHaveTextContent('限定 2 篇文档')
+
+    // 再次点击已选文档：取消该文档的限定
+    await user.click(screen.getByText('讲义.pdf'))
+    expect(screen.getByTestId('scope-chip')).toHaveTextContent('限定 1 篇文档')
+    expect(screen.getByText('已选 1')).toBeInTheDocument()
+
+    // 恢复全课程：清空全部限定
+    await user.click(screen.getByRole('button', { name: '恢复全课程' }))
+    expect(screen.getByTestId('scope-chip')).toHaveTextContent('全课程')
+    expect(screen.queryByTestId('selection-note')).not.toBeInTheDocument()
+    expect(screen.queryByText('已选 1')).not.toBeInTheDocument()
+
+    await user.type(screen.getByPlaceholderText(/ADD 指令/), '全课程的问题')
+    await user.click(screen.getByRole('button', { name: '开始问答' }))
+
+    expect(await screen.findByText('重点')).toBeInTheDocument()
+    const queryBody = JSON.parse(
+      String(server.matching('/api/v1/query')[0].body),
+    ) as QueryBody
+    expect(queryBody).toMatchObject({
+      question: '全课程的问题',
+      course_code: 'CS-COMP-ORG',
+      top_k: 5,
+    })
+    // 全课程模式两个文档限定字段都不发送
+    expect(queryBody).not.toHaveProperty('document_ids')
+    expect(queryBody).not.toHaveProperty('document_id')
   })
 })
 

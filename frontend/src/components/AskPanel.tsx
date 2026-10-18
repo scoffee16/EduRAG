@@ -12,7 +12,8 @@ interface AskPanelProps {
   onTopKChange: (value: number) => void
   courseCode: string
   courseName?: string
-  selectedFilename?: string
+  /** 限定检索的文档名（可多选；为空表示全课程检索）。 */
+  selectedFilenames: string[]
   queryState: 'idle' | 'loading' | 'success' | 'error'
   queryError: { message: string; requestId?: string }
   answer: QueryResponse | null
@@ -46,13 +47,25 @@ export default function AskPanel({
   onTopKChange,
   courseCode,
   courseName,
-  selectedFilename,
+  selectedFilenames,
   queryState,
   queryError,
   answer,
   onSubmit,
 }: AskPanelProps) {
   const loading = queryState === 'loading'
+  const selectedCount = selectedFilenames.length
+  // 检索范围：全课程 / 限定 1 篇文档 / 限定 N 篇文档
+  const scopeLabel =
+    selectedCount === 0
+      ? '全课程'
+      : selectedCount === 1
+        ? '限定 1 篇文档'
+        : `限定 ${selectedCount} 篇文档`
+  const scopeHelp =
+    selectedCount === 0
+      ? '所有归属于该课程的文档都可被检索；想切换成限定文档模式，请点击您想限定的课程文档。'
+      : `仅检索已选 ${selectedCount} 篇文档；再次点击已选文档可取消；也可在文档列表点「恢复全课程」退出限定模式。`
   // 旧后端不返回 knowledge_sources 时，有引用即视为使用了课程资料
   const knowledgeSources =
     answer?.knowledge_sources ??
@@ -71,11 +84,15 @@ export default function AskPanel({
             优先基于课程文档检索；资料不足时会补充联网搜索或模型通用知识，并标注来源。
           </p>
         </div>
-        <span className="scope-chip">
+        <span className="scope-chip" data-testid="scope-chip">
           <MessageSquare size={14} aria-hidden="true" />
-          {selectedFilename ? '单份文档' : '全课程'}
+          {scopeLabel}
         </span>
       </div>
+
+      <p className="scope-help" data-testid="scope-help">
+        {scopeHelp}
+      </p>
 
       <form onSubmit={onSubmit} className="ask-form">
         <label className="question-box">
@@ -102,10 +119,11 @@ export default function AskPanel({
           </label>
           <span className="query-hint">
             按课程 <strong>{courseName || courseCode || '—'}</strong> 检索
-            {selectedFilename && (
+            {selectedCount > 0 && (
               <>
                 {' '}
-                · 限定 <strong>{selectedFilename}</strong>
+                · 限定{' '}
+                <strong title={selectedFilenames.join('、')}>{selectedCount} 篇文档</strong>
               </>
             )}
           </span>

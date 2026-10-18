@@ -62,6 +62,12 @@ export function stageLabel(progress: DocumentProgress | null | undefined): strin
   }
 }
 
+/** 本地时钟文案（HH:MM:SS），用于「文档列表已刷新（HH:MM:SS）」提示。 */
+export function formatClock(date = new Date()): string {
+  const pad = (value: number) => String(value).padStart(2, '0')
+  return `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`
+}
+
 /** 进度百分比；无法计算（total 未知）时返回 null，UI 用不确定进度条。 */
 export function stagePercent(progress: DocumentProgress | null | undefined): number | null {
   if (!progress) return null

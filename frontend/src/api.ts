@@ -207,10 +207,18 @@ export async function deleteDocument(documentId: string) {
   )
 }
 
-export async function askQuestion(
-  body: { question: string; course_code?: string; document_id?: string; top_k: number },
-  signal?: AbortSignal,
-) {
+/** 问答请求体：限定文档优先用 `document_ids`（1..50 篇），`document_id` 仅兼容旧后端。 */
+export interface QueryPayload {
+  question: string
+  course_code?: string
+  /** 全课程检索时不传；限定检索时为已选文档 ID（长度 1..N）。 */
+  document_ids?: string[]
+  /** 旧版单文档字段；前端已不再发送，保留类型以兼容旧后端。 */
+  document_id?: string
+  top_k: number
+}
+
+export async function askQuestion(body: QueryPayload, signal?: AbortSignal) {
   return parseResponse<QueryResponse>(
     await fetch('/api/v1/query', {
       method: 'POST',

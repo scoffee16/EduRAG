@@ -18,7 +18,7 @@ import {
   type OcrHealth,
   type QueryResponse,
 } from './api'
-import { fileExtension } from './format'
+import { fileExtension, formatClock } from './format'
 import AskPanel from './components/AskPanel'
 import CourseSelect from './components/CourseSelect'
 import DocumentList from './components/DocumentList'
@@ -27,12 +27,16 @@ import UploadPanel, { type UploadPhase } from './components/UploadPanel'
 
 const DEFAULT_POLL_INTERVAL_MS = 1500
 const DEFAULT_UPLOAD_TIMEOUT_MS = 10 * 60 * 1000
+/** 文档列表刷新成功提示的展示时长（2-3 秒后自动消失）。 */
+const DEFAULT_REFRESH_NOTICE_MS = 2600
 
 export interface AppProps {
   /** 上传进度轮询间隔，测试可调小；生产默认 1.5s。 */
   pollIntervalMs?: number
   /** 上传进度超时时间，测试可调小；生产默认 10 分钟。 */
   uploadTimeoutMs?: number
+  /** 文档列表刷新成功提示的展示时长；生产默认 2.6s。 */
+  refreshNoticeMs?: number
 }
 
 export function errorText(error: unknown) {
@@ -70,6 +74,7 @@ const BUSY_PHASES: UploadPhase[] = ['uploading', 'processing']
 export default function App({
   pollIntervalMs = DEFAULT_POLL_INTERVAL_MS,
   uploadTimeoutMs = DEFAULT_UPLOAD_TIMEOUT_MS,
+  refreshNoticeMs = DEFAULT_REFRESH_NOTICE_MS,
 }: AppProps = {}) {
   const [courses, setCourses] = useState<CourseSummary[]>([])
   const [coursesState, setCoursesState] = useState<'loading' | 'ready' | 'error'>('loading')
@@ -87,7 +92,11 @@ export default function App({
   const [documents, setDocuments] = useState<DocumentSummary[]>([])
   const [listState, setListState] = useState<'idle' | 'loading' | 'error'>('idle')
   const [listError, setListError] = useState('')
-  const [selectedDocument, setSelectedDocument] = useState('')
+  // 限定检索的文档（多选，1..N 篇；为空表示检索全课程）
+  const [selectedDocuments, setSelectedDocuments] = useState<string[]>([])
+  // 手动刷新文档列表成功后的 transient 提示（2-3 秒自动消失）
+  const [listNotice, setListNotice] = useState('')
+  const refreshNoticeTimer = useRef<number | null>(null)
 
   const [ocr, setOcr] = useState<OcrHealth | null>(null)
   const [ocrState, setOcrState] = useState<'loading' | 'ready' | 'error'>('loading')
@@ -115,6 +124,26 @@ export default function App({
   courseRef.current = courseCode
   const uploadBusy = BUSY_PHASES.includes(uploadPhase)
 
+  /** 立即清除「文档列表已刷新」提示及其定时器。 */
+  const clearRefreshNotice = useCallback(() => {
+    if (refreshNoticeTimer.current != null) {
+      window.clearTimeout(refreshNoticeTimer.current)
+      refreshNoticeTimer.current = null
+    }
+    setListNotice('')
+  }, [])
+
+  // 卸载时清理刷新提示定时器，避免对已卸载组件 setState
+  useEffect(
+    () => () => {
+      if (refreshNoticeTimer.current != null) {
+        window.clearTimeout(refreshNoticeTimer.current)
+        refreshNoticeTimer.current = null
+      }
+    },
+    [],
+  )
+
   const loadCourses = useCallback(async (): Promise<CourseSummary[]> => {
     setCoursesState('loading')
     setCoursesError('')
@@ -136,33 +165,45 @@ export default function App({
     }
   }, [])
 
-  const loadDocuments = useCallback(async (course: string) => {
-    listRequest.current?.abort()
-    if (!course.trim()) {
-      setDocuments([])
-      setSelectedDocument('')
-      setListState('idle')
+  const loadDocuments = useCallback(
+    async (course: string, options: { announce?: boolean } = {}) => {
+      clearRefreshNotice()
+      listRequest.current?.abort()
+      if (!course.trim()) {
+        setDocuments([])
+        setSelectedDocuments([])
+        setListState('idle')
+        setListError('')
+        return
+      }
+      const controller = new AbortController()
+      listRequest.current = controller
+      setListState('loading')
       setListError('')
-      return
-    }
-    const controller = new AbortController()
-    listRequest.current = controller
-    setListState('loading')
-    setListError('')
-    try {
-      const next = await getDocuments(course.trim(), controller.signal)
-      if (controller.signal.aborted) return
-      setDocuments(next)
-      setSelectedDocument((current) =>
-        next.some((document) => document.document_id === current) ? current : '',
-      )
-      setListState('idle')
-    } catch (error) {
-      if ((error as Error).name === 'AbortError') return
-      setListState('error')
-      setListError(errorText(error))
-    }
-  }, [])
+      try {
+        const next = await getDocuments(course.trim(), controller.signal)
+        if (controller.signal.aborted) return
+        setDocuments(next)
+        // 刷新/切换课程后清理已失效的限定选择（如文档已被删除）
+        setSelectedDocuments((current) =>
+          current.filter((id) => next.some((document) => document.document_id === id)),
+        )
+        setListState('idle')
+        if (options.announce) {
+          setListNotice(`文档列表已刷新（${formatClock()}）`)
+          refreshNoticeTimer.current = window.setTimeout(() => {
+            refreshNoticeTimer.current = null
+            setListNotice('')
+          }, refreshNoticeMs)
+        }
+      } catch (error) {
+        if ((error as Error).name === 'AbortError') return
+        setListState('error')
+        setListError(errorText(error))
+      }
+    },
+    [clearRefreshNotice, refreshNoticeMs],
+  )
 
   // 首次挂载：课程列表 + OCR 状态
   useEffect(() => {
@@ -192,10 +233,10 @@ export default function App({
     else setManualCourse(true)
   }, [coursesState, courses])
 
-  // 切换课程：立即重载文档列表，并清空选中文档与上一次回答。
+  // 切换课程：立即重载文档列表，并清空限定选择与上一次回答。
   // 手动新建模式下 courseCode 为空，创建成功前不会用输入值请求文档。
   useEffect(() => {
-    setSelectedDocument('')
+    setSelectedDocuments([])
     setAnswer(null)
     setQueryState('idle')
     setQueryError({ message: '' })
@@ -403,7 +444,7 @@ export default function App({
     setCourseNotice(null)
     try {
       await deleteCourse(course.code, { force: true })
-      setSelectedDocument('')
+      setSelectedDocuments([])
       setAnswer(null)
       setQueryState('idle')
       setQueryError({ message: '' })
@@ -440,12 +481,14 @@ export default function App({
     setQueryState('loading')
     setQueryError({ message: '' })
     setAnswer(null)
+    // 限定文档：有选择时传 1..N 个 document_ids；全课程则不传（兼容旧后端字段也不传）
+    const documentIds = [...selectedDocuments]
     try {
       const result = await askQuestion(
         {
           question: question.trim(),
           course_code: code,
-          ...(selectedDocument ? { document_id: selectedDocument } : {}),
+          ...(documentIds.length > 0 ? { document_ids: documentIds } : {}),
           top_k: topK,
         },
         controller.signal,
@@ -468,8 +511,8 @@ export default function App({
     if (!window.confirm(`确定删除“${document.filename}”吗？此操作不可撤销。`)) return
     try {
       await deleteDocument(document.document_id)
-      setSelectedDocument((current) =>
-        current === document.document_id ? '' : current,
+      setSelectedDocuments((current) =>
+        current.filter((documentId) => documentId !== document.document_id),
       )
       void loadCourses()
       await loadDocuments(courseRef.current)
@@ -479,13 +522,27 @@ export default function App({
     }
   }
 
-  const selectDocument = (documentId: string) => {
-    setSelectedDocument((current) => (current === documentId ? '' : documentId))
+  /** 点击文档行：多选 toggle（限定检索范围）。 */
+  const toggleDocument = (documentId: string) => {
+    setSelectedDocuments((current) =>
+      current.includes(documentId)
+        ? current.filter((id) => id !== documentId)
+        : [...current, documentId],
+    )
   }
 
-  const selectedDocumentSummary = documents.find(
-    (document) => document.document_id === selectedDocument,
-  )
+  /** 恢复全课程检索：清空所有文档限定选择。 */
+  const clearDocumentSelection = () => setSelectedDocuments([])
+
+  /** 手动刷新文档列表：成功后展示 transient 提示（失败保留错误提示）。 */
+  const refreshDocuments = useCallback(() => {
+    void loadDocuments(courseRef.current, { announce: true })
+  }, [loadDocuments])
+
+  // 按选择顺序映射成文档摘要；文档被删除/刷新后自动收缩，保证计数一致
+  const selectedDocumentSummaries = selectedDocuments
+    .map((id) => documents.find((document) => document.document_id === id))
+    .filter((document): document is DocumentSummary => document != null)
   const currentCourse = courses.find((course) => course.code === courseCode)
   const ocrLabel =
     ocrState === 'loading'
@@ -559,7 +616,9 @@ export default function App({
               onTopKChange={setTopK}
               courseCode={courseCode}
               courseName={currentCourse?.name}
-              selectedFilename={selectedDocumentSummary?.filename}
+              selectedFilenames={selectedDocumentSummaries.map(
+                (document) => document.filename,
+              )}
               queryState={queryState}
               queryError={queryError}
               answer={answer}
@@ -604,12 +663,14 @@ export default function App({
               documents={documents}
               courses={courses}
               courseCode={courseCode}
-              selectedDocument={selectedDocument}
+              selectedDocuments={selectedDocuments}
               listState={listState}
               listError={listError}
-              onSelect={selectDocument}
+              refreshNotice={listNotice}
+              onToggle={toggleDocument}
+              onClearSelection={clearDocumentSelection}
               onDelete={(document) => void removeDocument(document)}
-              onRefresh={() => void loadDocuments(courseRef.current)}
+              onRefresh={refreshDocuments}
             />
           </aside>
         </section>

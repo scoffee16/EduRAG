@@ -1841,3 +1841,117 @@ pre {
     transform: translateX(320%);
   }
 }
+
+
+/* =========================================================================
+   交互增强：多选限定检索、刷新成功提示、课程删除说明、检索范围说明
+   （追加在末尾，避免改动既有设计 token 与响应式规则）
+   ========================================================================= */
+
+.panel-head-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex: none;
+}
+
+.selected-count-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 9px;
+  border-radius: 999px;
+  background: var(--color-primary-soft);
+  color: var(--color-primary-strong);
+  font-size: var(--font-xs);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+/* 刷新成功提示：紧凑一些，2-3 秒后由 App 卸载 */
+.refresh-notice {
+  margin: 8px 0 0;
+  padding: 8px 10px;
+  align-items: center;
+  font-size: var(--font-xs);
+}
+
+.refresh-notice .notice-icon {
+  width: 14px;
+  height: 14px;
+}
+
+.config-course-note {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 8px 0 0;
+  padding: 6px 10px;
+  border: 1px dashed var(--gray-200);
+  border-radius: var(--radius-sm);
+  background: var(--gray-50);
+  color: var(--gray-500);
+  font-size: var(--font-xs);
+  line-height: 1.5;
+}
+
+.config-course-note svg {
+  flex: none;
+  color: var(--gray-400);
+}
+
+.list-hint {
+  margin: 8px 0 6px;
+  color: var(--gray-500);
+  font-size: var(--font-xs);
+  line-height: 1.6;
+}
+
+.scope-help {
+  margin: 6px 0 12px;
+  padding: 8px 10px;
+  border: 1px solid var(--gray-100);
+  border-radius: var(--radius-sm);
+  background: var(--gray-50);
+  color: var(--gray-500);
+  font-size: var(--font-xs);
+  line-height: 1.6;
+}
+
+.doc-selected-check {
+  flex: none;
+  margin-left: auto;
+  color: var(--color-primary);
+}
+
+.course-delete-wrap {
+  display: inline-flex;
+  flex: none;
+}
+
+.course-delete-button.locked:disabled {
+  opacity: 0.7;
+  color: var(--gray-400);
+  border-color: var(--gray-200);
+  background: var(--gray-50);
+  cursor: not-allowed;
+}
+
+.course-delete-button.locked:hover:not(:disabled) {
+  color: var(--gray-500);
+  border-color: var(--gray-200);
+  background: var(--gray-50);
+}
+
+@media (max-width: 768px) {
+  .panel-head-actions {
+    gap: var(--space-1);
+  }
+
+  .selection-note {
+    align-items: flex-start;
+  }
+
+  .selection-note .text-button {
+    margin-left: auto;
+  }
+}

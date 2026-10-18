@@ -118,8 +118,8 @@ export default function UploadPanel({
         </span>
       </label>
       <div className="file-note">
-        <span>PDF 扫描页依赖 OCR 引擎</span>
-        <span>PPTX / DOCX 仅解析文本内容</span>
+        <span>PDF 扫描页可自动 OCR（依赖 OCR 引擎）</span>
+        <span>PPTX / DOCX 只解析文字段落，图片中的文字暂不识别</span>
       </div>
 
       {oldDoc && (
