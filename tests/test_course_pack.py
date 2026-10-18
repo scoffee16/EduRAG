@@ -10,6 +10,11 @@ def test_complete_course_pack_is_loaded(configs_dir: Path) -> None:
     course_pack = load_course_pack(configs_dir / "course_packs" / "comp_org.yaml")
     definition = course_pack.course_pack
 
+    assert definition.code == "CS-COMP-ORG"
+    assert definition.name == "示例课程 · 计算机组成原理"
+    assert definition.name.startswith("示例课程")
+    assert "不能删除" in definition.description
+
     assert [parser.type for parser in definition.parsers] == [
         "pdf",
         "pptx",

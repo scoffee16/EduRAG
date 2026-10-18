@@ -104,9 +104,9 @@ EduRAG 采用分层模块化架构，自上而下分为：
 
 ```yaml
 course_pack:
-  name: "计算机组成原理"
+  name: "示例课程 · 计算机组成原理"
   code: "CS-COMP-ORG"
-  description: "微程序控制器、模型机、CPU设计"
+  description: "内置示例课程（由 configs/course_packs 同步生成，不能删除）：微程序控制器、模型机、CPU 设计"
   
   parsers:
     - type: pdf
@@ -719,7 +719,7 @@ curl.exe http://127.0.0.1:8000/api/v1/documents/<DOCUMENT_ID>
 ED-04 补齐课程生命周期管理和「课程资料优先、外部知识补充并标注来源」的问答策略：
 
 - **新建课程**：前端「手动新建课程」拆分为**课程代码**与**课程名称**两个输入框，调用 `POST /api/v1/courses` 创建（代码 `strip().upper()` 规范化、名称独立保存），创建成功后自动选中该课程并可立即上传文档。
-- **删除课程**：课程下拉旁提供删除按钮（仅手动创建、`deletable=true` 的课程可删）；确认后调用 `DELETE /api/v1/courses/{code}?force=true` 级联删除课程下的文档、Qdrant 向量、MinIO 对象与分块记录。由 `configs/course_packs/*.yaml` 同步生成的课程标记 `origin=config`，不允许在界面删除（需改配置文件）。
+- **删除课程**：课程下拉旁提供删除按钮（仅手动创建、`deletable=true` 的课程可删）；确认后调用 `DELETE /api/v1/courses/{code}?force=true` 级联删除课程下的文档、Qdrant 向量、MinIO 对象与分块记录。由 `configs/course_packs/*.yaml` 同步生成的课程标记 `origin=config`，不允许在界面删除（需改配置文件）；内置的 `CS-COMP-ORG` 已重命名为「示例课程 · 计算机组成原理」，前端对 `origin=config` 的课程展示禁用的删除按钮并注明原因。
 - **课程来源标记**：`GET /api/v1/courses` 新增 `origin`（`config`/`manual`）与 `deletable` 字段，数据库 `course_packs.origin` 列通过幂等迁移补齐，已有课程默认为 `manual`，启动同步时 YAML 课程置为 `config`。
 - **分层知识来源**：问答优先基于已解析的课程文档并给出页级引用；课程资料检索不到时，自动尝试联网搜索（Bing HTML 结果）再退化为模型通用知识。响应新增 `knowledge_sources`（`course_materials` / `web_search` / `model_knowledge`，按优先级排序）与 `web_results`。为避免模型"忘记声明"，无课程资料时后端会确定性在答案开头追加 Markdown 引用块说明来源（"课程资料中未检索到相关片段……仅供参考"）；前端同时显示来源徽章、警示条与联网结果链接。
 - **课程资料覆盖不足**：即使有检索片段，模型也可在答案末尾以 `### 补充说明（来源：模型通用知识，非课程资料）` 补充未覆盖部分，此时 `knowledge_sources` 会同时包含 `course_materials` 与 `model_knowledge`。
@@ -771,3 +771,53 @@ curl.exe -X POST http://127.0.0.1:8000/api/v1/query `
 - 无课程资料（空课程问量子纠缠）→ `knowledge_sources=["web_search","model_knowledge"]`、`web_results=5`，答案开头为确定性引用块 `> 知识来源：公开网络搜索结果（非课程资料）……仅供参考`。
 - 级联删除：`DELETE /courses/CS-ED04-E2E?force=true` → 204，课程从列表消失、文档详情 404 `not_found`、文档列表清空；删除空课程 204，临时课程全部清理。
 - Bing HTML 解析在容器内实测可返回 5 条结果（中英文查询）；反爬或超时时按契约静默降级为模型通用知识（不返回 5xx）。
+
+## ED-05 示例课程命名、多文档限定与交互修复
+
+ED-05 针对实际使用反馈修正了课程语义、文档限定能力与前端交互细节：
+
+- **示例课程**：`configs/course_packs/comp_org.yaml` 中的内置课程 `CS-COMP-ORG` 重命名为「示例课程 · 计算机组成原理」。该课程由 `configs/course_packs/*.yaml` 在 API 启动时同步生成，删除后重启会被重新创建，因此 `origin=config`、`deletable=false`；前端不再静默隐藏删除按钮，而是展示禁用的删除按钮并注明「示例课程由配置文件同步生成，不能删除」。
+- **多文档限定**：文档列表点击改为多选（toggle，`aria-pressed` 高亮 + 已选数量），可同时限定 1..N 篇文档；`POST /api/v1/query` 新增可选 `document_ids: string[]`（去空白、保序去重、1..50 项，超限/空数组 → 422；与 `document_id` 同时出现时 `document_ids` 优先；仍要求 `course_code`），响应结构不变，仅返回所选文档的引用。旧字段 `document_id` 继续兼容。
+- **接口契约细节**：不限定文档时前端不发送任何文档字段（空数组会 422）；「恢复全课程」清空选择后退回课程级检索。
+- **刷新反馈**：文档列表右上角刷新按钮保留 spinner，成功后展示 2.6 秒 transient 提示「文档列表已刷新（HH:MM:SS）」（`aria-live="polite"`，切课程/卸载自动清理定时器）；失败保留错误提示。
+- **按钮与文案清理**：删除与刷新重复且无反馈的「查询」按钮；逐个审计其余按钮，均保留可见效果并补齐 `aria-label`/`title`。上传说明改为准确表述：「PDF 扫描页可自动 OCR（依赖 OCR 引擎）；PPTX / DOCX 只解析文字段落，图片中的文字暂不识别」。
+- **限定模式说明**：`AskPanel` 显示「全课程 / 限定 1 篇文档 / 限定 N 篇文档」及对应说明——全课程模式会检索该课程下所有文档，想切换成限定文档模式请点击文档列表中的文档；限定模式仅检索已选文档，再次点击可取消，也可点「恢复全课程」。
+
+### ED-05 API 示例
+
+```powershell
+# 限定两篇文档检索（响应只返回所选文档的引用）
+curl.exe -X POST http://127.0.0.1:8000/api/v1/query `
+  -H "Content-Type: application/json" `
+  -d '{ "question": "ADD 指令的微地址序列是什么？", "course_code": "CS-COMP-ORG", "document_ids": ["<DOC-A>", "<DOC-B>"], "top_k": 5 }'
+
+# 旧客户端仍可用单文档字段（等价于长度 1 的 document_ids）
+curl.exe -X POST http://127.0.0.1:8000/api/v1/query `
+  -H "Content-Type: application/json" `
+  -d '{ "question": "ADD 指令的微地址序列是什么？", "course_code": "CS-COMP-ORG", "document_id": "<DOC-A>", "top_k": 5 }'
+```
+
+`document_ids` 校验失败统一返回 `422 invalid_request`：空数组、超过 50 项、纯空白项、限定文档但缺少 `course_code`。不存在的 id 视为无命中，不会回退为全课程检索。
+
+### ED-05 验收结果
+
+验收日期：2026-10-18（Windows 11 / Python 3.13 / Node 24 / Docker Desktop）。
+
+| 检查项 | 命令 | 结果 |
+| --- | --- | --- |
+| 后端静态检查 | `python -m ruff check .` | All checks passed |
+| 后端测试 | `python -m pytest -q` | 297 passed, 1 warning（第三方 pandas/numexpr 提示，与项目无关） |
+| 前端测试 | `cd frontend; npm run test` | 26 passed（`src/App.test.tsx`） |
+| 前端构建 | `cd frontend; npm run build` | 通过（`tsc -b && vite build`；JS gzip 190.65 kB、CSS gzip 13.63 kB，仅既有 chunk 体积警告） |
+| 容器健康 | `docker compose ps` | api/postgres/qdrant/minio 均 healthy |
+| 健康检查契约 | `GET /api/v1/health` | `{"status":"ok","service":"edurage","version":"0.0.1"}`（未变） |
+
+真实容器端到端（重建 `edurage-api:local` 后经 `http://127.0.0.1:8000` 验证，脚本 `.tmp/e2e/run_e2e_ed05.py` 共 18 项检查全部通过）：
+
+- 容器启动日志：`course_packs.origin` 迁移幂等（`unchanged`），`course pack CS-COMP-ORG unchanged`（镜像内 `configs/` 已包含改名后的 YAML），既有 dev 库数据未丢。
+- `GET /courses` 中 `CS-COMP-ORG` 名称为「示例课程 · 计算机组成原理」、`origin=config`、`deletable=false`；`DELETE` 该课程 → 409 `course_config_managed`。
+- 临时课程 `POST /courses` 201（代码/名称规范化、`origin=manual`、`deletable=true`），上传两篇 PDF 均轮询至 `indexed`。
+- 限定文档 A 提问 → `knowledge_sources[0]=course_materials`、引用全部 `document_id=A`、`filename=sample-a.pdf`；限定文档 B 同理；限定 [A,B] → 引用只来自 A/B。模型对片段覆盖不足的内容仍会附 `### 补充说明（来源：模型通用知识，非课程资料）`，属既定契约。
+- 旧 `document_id` 单文档字段行为不变；`document_ids=[A,A," "]` 去重去空白后 200；不存在的 document_id 不回退为全课程资料（无引用、来源不含 `course_materials`）。
+- 负向校验：空数组 / 缺少 `course_code` / 51 个 id 均 422 `invalid_request`。
+- 级联删除临时课程 204，文档详情 404 `not_found`，课程列表清理完毕。

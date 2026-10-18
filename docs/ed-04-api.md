@@ -67,8 +67,8 @@ upload with a new `course_code`.
 [
   {
     "code": "CS-COMP-ORG",
-    "name": "计算机组成原理",
-    "description": "微程序控制器、模型机、CPU设计",
+    "name": "示例课程 · 计算机组成原理",
+    "description": "内置示例课程（由 configs/course_packs 同步生成，不能删除）：微程序控制器、模型机、CPU 设计",
     "origin": "config",
     "deletable": false,
     "document_count": 3,
@@ -137,6 +137,28 @@ answer is grounded in retrieved course chunks and carries page citations
 (`knowledge_sources: ["course_materials"]`). When a course-material chunk is
 found but the answer also contains a clearly labeled supplemental section, the
 model marks it and `model_knowledge` is appended to `knowledge_sources`.
+
+### Retrieval scope
+
+Queries are scoped to the whole course by default. Send `document_ids` to
+restrict retrieval to one or more documents of that course:
+
+```json
+{
+  "question": "ADD 指令的微地址序列是什么？",
+  "course_code": "CS-COMP-ORG",
+  "document_ids": ["8f14e45f-ceea-467f-b0b6-1d2f5a0b8e21", "a3c1f0d2-6a4b-41d9-9f0e-2b7c5d6e8f10"],
+  "top_k": 5
+}
+```
+
+The ids are stripped, de-duplicated and must contain 1-50 non-empty entries;
+an empty array, more than 50 ids or a scoped query without `course_code`
+returns `422`. Unknown ids are accepted and simply match nothing. The legacy
+`document_id` field is kept for older clients and is treated as a one-element
+`document_ids`; when both are present `document_ids` wins. Citations returned
+for a scoped query only reference the selected documents. The frontend exposes
+this behaviour as the "限定 N 篇文档" mode, while the default mode is "全课程".
 
 When no course chunk matches, the service falls back to a public web search
 (Bing HTML results). If results are available the answer is produced from those

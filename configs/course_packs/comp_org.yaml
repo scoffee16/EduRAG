@@ -1,7 +1,7 @@
 course_pack:
-  name: "计算机组成原理"
+  name: "示例课程 · 计算机组成原理"
   code: "CS-COMP-ORG"
-  description: "微程序控制器、模型机、CPU设计"
+  description: "内置示例课程（由 configs/course_packs 同步生成，不能删除）：微程序控制器、模型机、CPU 设计"
 
   parsers:
     - type: pdf
