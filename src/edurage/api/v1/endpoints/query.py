@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import time
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Request
 
@@ -23,9 +23,12 @@ def query(
     service: Annotated[RAGService, Depends(get_rag_service)] = None,
 ) -> QueryResponse:
     started = time.perf_counter()
-    kwargs = {"course_code": request.course_code, "top_k": request.top_k}
-    if request.document_id is not None:
-        kwargs["document_id"] = request.document_id
+    kwargs: dict[str, Any] = {
+        "course_code": request.course_code,
+        "top_k": request.top_k,
+    }
+    if request.document_ids is not None:
+        kwargs["document_ids"] = request.document_ids
     try:
         result = service.answer_question(request.question, **kwargs)
     except ValueError as exc:

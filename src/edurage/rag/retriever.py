@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from typing import Any, Protocol
 
 from qdrant_client.http import models as qdrant_models
@@ -27,19 +27,47 @@ class QdrantClient(Protocol):
         """Search a collection and return scored points."""
 
 
+def normalize_document_ids(
+    document_ids: Sequence[str] | None = None,
+    document_id: str | None = None,
+) -> list[str]:
+    """Resolve the effective document scope; a non-empty ``document_ids`` wins."""
+
+    normalized: list[str] = []
+    if document_ids is not None:
+        for value in document_ids:
+            cleaned = str(value).strip()
+            if cleaned and cleaned not in normalized:
+                normalized.append(cleaned)
+    if not normalized and document_id is not None:
+        cleaned = str(document_id).strip()
+        if cleaned:
+            normalized.append(cleaned)
+    return normalized
+
+
 class _CompatFilter(qdrant_models.Filter):
     """Qdrant Filter with read compatibility for ED-01 fake clients."""
 
+    @staticmethod
+    def _condition_dict(condition: Any) -> dict[str, Any]:
+        match = condition.match
+        values = getattr(match, "any", None)
+        if values is not None:
+            return {"key": condition.key, "match": {"any": list(values)}}
+        return {"key": condition.key, "match": {"value": getattr(match, "value", None)}}
+
     def __getitem__(self, key: str) -> Any:
         if key == "must":
-            return [
-                {
-                    "key": condition.key,
-                    "match": {"value": condition.match.value},
-                }
-                for condition in (self.must or [])
-            ]
+            return [self._condition_dict(condition) for condition in (self.must or [])]
         return getattr(self, key)
+
+
+def _document_condition(document_ids: Sequence[str]) -> qdrant_models.FieldCondition:
+    return qdrant_models.FieldCondition(
+        key="document_id",
+        match=qdrant_models.MatchAny(any=list(document_ids)),
+    )
 
 
 def _setting(name: str, default: Any) -> Any:
@@ -96,14 +124,14 @@ def _matches_scope(
     hit: Mapping[str, Any],
     *,
     course_code: str | None,
-    document_id: str | None,
+    document_ids: Sequence[str],
 ) -> bool:
     payload = hit.get("payload", {})
     if not isinstance(payload, Mapping):
         return False
     if course_code is not None and payload.get("course_code") != course_code:
         return False
-    return document_id is None or payload.get("document_id") == document_id
+    return not document_ids or payload.get("document_id") in document_ids
 
 
 def _search(client: QdrantClient, kwargs: dict[str, Any]) -> Any:
@@ -140,9 +168,12 @@ class Retriever:
         course_code: str | None = None,
         top_k: int | None = None,
         document_id: str | None = None,
+        *,
+        document_ids: Sequence[str] | None = None,
     ) -> list[dict[str, Any]]:
-        if document_id is not None and course_code is None:
-            raise ValueError("course_code is required when document_id is provided")
+        scope = normalize_document_ids(document_ids, document_id)
+        if scope and course_code is None:
+            raise ValueError("course_code is required when document_ids is provided")
         vector = _embed_query(self.embedder, question)
         limit = top_k or int(_setting("top_k", 5))
         kwargs: dict[str, Any] = {
@@ -159,13 +190,8 @@ class Retriever:
                     match=qdrant_models.MatchValue(value=course_code),
                 )
             )
-        if document_id is not None:
-            conditions.append(
-                qdrant_models.FieldCondition(
-                    key="document_id",
-                    match=qdrant_models.MatchValue(value=document_id),
-                )
-            )
+        if scope:
+            conditions.append(_document_condition(scope))
         if conditions:
             kwargs["query_filter"] = _CompatFilter(must=conditions)
         result = _search(self.client, kwargs)
@@ -177,7 +203,7 @@ class Retriever:
             and _matches_scope(
                 hit,
                 course_code=course_code,
-                document_id=document_id,
+                document_ids=scope,
             )
         ]
         return sorted(hits, key=_score, reverse=True)
@@ -191,6 +217,7 @@ def retrieve(
     top_k: int | None = None,
     *,
     document_id: str | None = None,
+    document_ids: Sequence[str] | None = None,
     embedder: Embedder,
     client: QdrantClient,
     collection_name: str = "edurage_chunks",
@@ -198,5 +225,9 @@ def retrieve(
     """Functional wrapper around :class:`Retriever`."""
 
     return Retriever(embedder, client, collection_name).retrieve(
-        question, course_code, top_k, document_id
+        question,
+        course_code,
+        top_k,
+        document_id,
+        document_ids=document_ids,
     )

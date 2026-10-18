@@ -37,10 +37,14 @@ class DocumentDetailResponse(BaseModel):
     created_at: str | None = None
 
 
+MAX_DOCUMENT_IDS = 50
+
+
 class QueryRequest(BaseModel):
     question: str = Field(min_length=1)
     course_code: str | None = "CS-COMP-ORG"
     document_id: str | None = None
+    document_ids: list[str] | None = None
     top_k: int | None = Field(default=None, ge=1)
 
     @field_validator("course_code")
@@ -51,10 +55,43 @@ class QueryRequest(BaseModel):
         normalized = value.strip().upper()
         return normalized or None
 
+    @field_validator("document_id")
+    @classmethod
+    def normalize_document_id(cls, value: str | None) -> str | None:
+        """Trim the legacy single-document selector; blanks mean unscoped."""
+        if value is None:
+            return None
+        normalized = value.strip()
+        return normalized or None
+
+    @field_validator("document_ids")
+    @classmethod
+    def normalize_document_ids(cls, value: list[str] | None) -> list[str] | None:
+        """Trim, drop blank and duplicate ids, and enforce the 1..MAX bound."""
+        if value is None:
+            return None
+        normalized: list[str] = []
+        for item in value:
+            cleaned = item.strip()
+            if cleaned and cleaned not in normalized:
+                normalized.append(cleaned)
+        if not normalized:
+            raise ValueError("document_ids must contain at least one non-empty document id")
+        if len(normalized) > MAX_DOCUMENT_IDS:
+            raise ValueError(
+                f"document_ids must contain at most {MAX_DOCUMENT_IDS} document ids"
+            )
+        return normalized
+
     @model_validator(mode="after")
-    def require_course_for_document(self) -> QueryRequest:
-        if self.document_id is not None and self.course_code is None:
-            raise ValueError("course_code is required when document_id is provided")
+    def resolve_document_scope(self) -> QueryRequest:
+        """Let ``document_ids`` win and map the legacy field onto a one-item scope."""
+        if self.document_ids:
+            self.document_id = None
+        elif self.document_id is not None:
+            self.document_ids = [self.document_id]
+        if self.document_ids and self.course_code is None:
+            raise ValueError("course_code is required when document_ids is provided")
         return self
 
 

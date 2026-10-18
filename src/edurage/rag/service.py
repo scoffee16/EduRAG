@@ -21,6 +21,7 @@ from edurage.rag.prompt import (
     NO_EVIDENCE_ANSWER,
     WEB_SEARCH_SOURCE_NOTICE,
 )
+from edurage.rag.retriever import normalize_document_ids
 
 logger = get_logger(__name__)
 
@@ -37,13 +38,13 @@ def _invoke_retriever(
     retriever: Any,
     question: str,
     course_code: str | None,
-    document_id: str | None,
+    document_ids: list[str],
     top_k: int | None,
 ) -> list[Mapping[str, Any]]:
     method = getattr(retriever, "retrieve", retriever)
     kwargs: dict[str, Any] = {"course_code": course_code, "top_k": top_k}
-    if document_id is not None:
-        kwargs["document_id"] = document_id
+    if document_ids:
+        kwargs["document_ids"] = document_ids
     return list(method(question, **kwargs) or [])
 
 
@@ -121,6 +122,7 @@ def answer_question(
     top_k: int | None = None,
     *,
     document_id: str | None = None,
+    document_ids: list[str] | None = None,
     retriever: Any,
     llm: Any,
     model: str | None = None,
@@ -130,7 +132,8 @@ def answer_question(
     """Retrieve evidence, generate a layered answer, and label its knowledge sources."""
 
     started = clock()
-    hits = _invoke_retriever(retriever, question, course_code, document_id, top_k)
+    scope = normalize_document_ids(document_ids, document_id)
+    hits = _invoke_retriever(retriever, question, course_code, scope, top_k)
     citations: list[dict[str, Any]] = []
     web_results: list[dict[str, str]] = []
     if hits:

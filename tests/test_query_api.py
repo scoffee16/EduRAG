@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+import pytest
 from fastapi.testclient import TestClient
 
 from edurage.api.deps import get_rag_service
@@ -10,16 +11,34 @@ from edurage.api.deps import get_rag_service
 class FakeRAGService:
     def __init__(self, result: dict[str, Any]) -> None:
         self.result = result
-        self.calls: list[tuple[str, str | None, int | None]] = []
+        self.calls: list[dict[str, Any]] = []
 
     def answer_question(
         self,
         question: str,
         course_code: str | None = None,
         top_k: int | None = None,
+        document_id: str | None = None,
+        document_ids: list[str] | None = None,
     ) -> dict[str, Any]:
-        self.calls.append((question, course_code, top_k))
+        self.calls.append(
+            {
+                "question": question,
+                "course_code": course_code,
+                "top_k": top_k,
+                "document_id": document_id,
+                "document_ids": document_ids,
+            }
+        )
         return self.result
+
+
+def _ok_result() -> dict[str, Any]:
+    return {"answer": "ok", "citations": [], "model": "deepseek-chat", "latency_ms": 0.0}
+
+
+def _install(client: TestClient, service: FakeRAGService) -> None:
+    client.app.dependency_overrides[get_rag_service] = lambda: service
 
 
 def test_query_returns_answer_citations_sources_and_request_id(client: TestClient) -> None:
@@ -42,7 +61,7 @@ def test_query_returns_answer_citations_sources_and_request_id(client: TestClien
             "latency_ms": 1.5,
         }
     )
-    client.app.dependency_overrides[get_rag_service] = lambda: service
+    _install(client, service)
 
     response = client.post(
         "/api/v1/query",
@@ -62,14 +81,22 @@ def test_query_returns_answer_citations_sources_and_request_id(client: TestClien
     assert body["model"] == "deepseek-chat"
     assert body["request_id"]
     assert body["request_id"] == response.headers["x-request-id"]
-    assert service.calls == [("ADD 指令的微地址序列是什么？", "CS-DEMO", 3)]
+    assert service.calls == [
+        {
+            "question": "ADD 指令的微地址序列是什么？",
+            "course_code": "CS-DEMO",
+            "top_k": 3,
+            "document_id": None,
+            "document_ids": None,
+        }
+    ]
 
 
 def test_query_uses_valid_incoming_request_id(client: TestClient) -> None:
     service = FakeRAGService(
         {"answer": "ok", "citations": [], "model": "deepseek-chat", "latency_ms": 0}
     )
-    client.app.dependency_overrides[get_rag_service] = lambda: service
+    _install(client, service)
 
     response = client.post(
         "/api/v1/query",
@@ -96,7 +123,7 @@ def test_query_without_hits_returns_model_knowledge_answer(client: TestClient) -
             "latency_ms": 0.5,
         }
     )
-    client.app.dependency_overrides[get_rag_service] = lambda: service
+    _install(client, service)
 
     response = client.post(
         "/api/v1/query",
@@ -109,7 +136,15 @@ def test_query_without_hits_returns_model_knowledge_answer(client: TestClient) -
     assert body["knowledge_sources"] == ["model_knowledge"]
     assert body["citations"] == []
     assert body["web_results"] == []
-    assert service.calls == [("未知问题", "CS-COMP-ORG", None)]
+    assert service.calls == [
+        {
+            "question": "未知问题",
+            "course_code": "CS-COMP-ORG",
+            "top_k": None,
+            "document_id": None,
+            "document_ids": None,
+        }
+    ]
 
 
 def test_query_returns_web_search_results_when_course_materials_missing(
@@ -134,7 +169,7 @@ def test_query_returns_web_search_results_when_course_materials_missing(
             "latency_ms": 2.0,
         }
     )
-    client.app.dependency_overrides[get_rag_service] = lambda: service
+    _install(client, service)
 
     response = client.post("/api/v1/query", json={"question": "ADD 指令是什么？"})
 
@@ -155,10 +190,108 @@ def test_query_defaults_new_fields_to_empty_lists(client: TestClient) -> None:
     service = FakeRAGService(
         {"answer": "ok", "citations": [], "model": "deepseek-chat", "latency_ms": 0}
     )
-    client.app.dependency_overrides[get_rag_service] = lambda: service
+    _install(client, service)
 
     response = client.post("/api/v1/query", json={"question": "q"})
 
     assert response.status_code == 200
     assert response.json()["knowledge_sources"] == []
     assert response.json()["web_results"] == []
+
+
+def test_query_maps_legacy_document_id_to_single_document_scope(client: TestClient) -> None:
+    service = FakeRAGService(_ok_result())
+    _install(client, service)
+
+    response = client.post(
+        "/api/v1/query",
+        json={"question": "q", "course_code": "CS-DEMO", "document_id": "doc-1"},
+    )
+
+    assert response.status_code == 200
+    call = service.calls[0]
+    assert call["document_ids"] == ["doc-1"]
+    assert call["document_id"] is None
+
+
+def test_query_normalizes_and_forwards_multiple_document_ids(client: TestClient) -> None:
+    service = FakeRAGService(_ok_result())
+    _install(client, service)
+
+    response = client.post(
+        "/api/v1/query",
+        json={
+            "question": "q",
+            "course_code": "CS-DEMO",
+            "document_ids": [" doc-b ", "doc-a", "doc-b", "  "],
+            "top_k": 2,
+        },
+    )
+
+    assert response.status_code == 200
+    call = service.calls[0]
+    assert call["document_ids"] == ["doc-b", "doc-a"]
+    assert call["document_id"] is None
+
+
+def test_query_prefers_document_ids_over_legacy_document_id(client: TestClient) -> None:
+    service = FakeRAGService(_ok_result())
+    _install(client, service)
+
+    response = client.post(
+        "/api/v1/query",
+        json={
+            "question": "q",
+            "course_code": "CS-DEMO",
+            "document_id": "legacy",
+            "document_ids": ["doc-a", "doc-b"],
+        },
+    )
+
+    assert response.status_code == 200
+    call = service.calls[0]
+    assert call["document_ids"] == ["doc-a", "doc-b"]
+    assert call["document_id"] is None
+
+
+def test_query_accepts_document_scope_at_maximum_length(client: TestClient) -> None:
+    service = FakeRAGService(_ok_result())
+    _install(client, service)
+    document_ids = [f"doc-{index:02d}" for index in range(50)]
+
+    response = client.post(
+        "/api/v1/query",
+        json={"question": "q", "course_code": "CS-DEMO", "document_ids": document_ids},
+    )
+
+    assert response.status_code == 200
+    assert service.calls[0]["document_ids"] == document_ids
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"question": "q", "course_code": "CS-DEMO", "document_ids": []},
+        {"question": "q", "course_code": "CS-DEMO", "document_ids": ["  "]},
+        {"question": "q", "course_code": None, "document_ids": ["doc-1"]},
+        {"question": "q", "course_code": None, "document_id": "doc-1"},
+        {
+            "question": "q",
+            "course_code": "CS-DEMO",
+            "document_ids": [f"doc-{index}" for index in range(51)],
+        },
+    ],
+)
+def test_invalid_document_scope_is_rejected_with_422(
+    client: TestClient, payload: dict[str, Any]
+) -> None:
+    service = FakeRAGService(_ok_result())
+    _install(client, service)
+
+    response = client.post("/api/v1/query", json=payload)
+
+    assert response.status_code == 422
+    body = response.json()
+    assert body["error"]["code"] == "invalid_request"
+    assert body["request_id"]
+    assert service.calls == []

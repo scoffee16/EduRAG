@@ -165,10 +165,29 @@ def test_retriever_applies_course_and_document_filters_and_sorts_scores() -> Non
 
     assert [hit["score"] for hit in hits] == [0.91, 0.42]
     query_filter = client.kwargs["query_filter"]
-    assert [(condition.key, condition.match.value) for condition in query_filter.must] == [
-        ("course_code", "CS-DEMO"),
-        ("document_id", "doc-1"),
-    ]
+    assert query_filter.must[0].key == "course_code"
+    assert query_filter.must[0].match.value == "CS-DEMO"
+    assert query_filter.must[1].key == "document_id"
+    assert query_filter.must[1].match.any == ["doc-1"]
+
+
+def test_retriever_keeps_only_hits_from_any_requested_document() -> None:
+    client = FakeQdrant(
+        [
+            Point({"document_id": "doc-a", "course_code": "CS-DEMO"}, 0.5),
+            Point({"document_id": "doc-b", "course_code": "CS-DEMO"}, 0.9),
+            Point({"document_id": "doc-c", "course_code": "CS-DEMO"}, 0.7),
+        ]
+    )
+
+    hits = Retriever(FakeEmbedder(), client).retrieve(
+        "问题",
+        course_code="CS-DEMO",
+        document_ids=["doc-a", "doc-c"],
+    )
+
+    assert [hit["payload"]["document_id"] for hit in hits] == ["doc-c", "doc-a"]
+    assert client.kwargs["query_filter"].must[1].match.any == ["doc-a", "doc-c"]
 
 
 def test_document_id_without_course_code_is_rejected_before_search() -> None:
@@ -176,6 +195,17 @@ def test_document_id_without_course_code_is_rejected_before_search() -> None:
 
     with pytest.raises(ValueError, match="course_code is required"):
         Retriever(FakeEmbedder(), client).retrieve("问题", document_id="doc-1")
+
+    assert client.kwargs == {}
+
+
+def test_document_ids_without_course_code_is_rejected_before_search() -> None:
+    client = FakeQdrant()
+
+    with pytest.raises(ValueError, match="course_code is required"):
+        Retriever(FakeEmbedder(), client).retrieve(
+            "问题", document_ids=["doc-1", "doc-2"]
+        )
 
     assert client.kwargs == {}
 

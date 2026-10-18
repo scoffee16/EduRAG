@@ -68,6 +68,32 @@ def test_cjk_spaces_and_ocr_marker_are_normalized_and_identifier_boundary_is_exa
     assert matched_terms(["ADD"], {"text": "ADDR 微地址"}) == []
 
 
+def test_local_keyword_retriever_accepts_any_of_multiple_documents() -> None:
+    candidates = [
+        {
+            "score": 0.9,
+            "payload": {"course_code": "CS-A", "document_id": "doc-a", "text": "ADD 控制信号"},
+        },
+        {
+            "score": 0.5,
+            "payload": {"course_code": "CS-A", "document_id": "doc-b", "text": "ADD 控制信号"},
+        },
+        {
+            "score": 0.8,
+            "payload": {"course_code": "CS-A", "document_id": "doc-c", "text": "ADD 控制信号"},
+        },
+    ]
+
+    hits = LocalKeywordRetriever().retrieve(
+        "ADD 控制信号",
+        course_code="CS-A",
+        document_ids=["doc-a", "doc-c"],
+        candidates=candidates,
+    )
+
+    assert [hit["payload"]["document_id"] for hit in hits] == ["doc-a", "doc-c"]
+
+
 def test_multiple_terms_outscore_single_identifier() -> None:
     terms = extract_terms("ADD 微地址 控制信号")
     assert keyword_score(terms, {"text": "ADD 微地址 控制信号"}) > keyword_score(

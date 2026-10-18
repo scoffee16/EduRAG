@@ -6,9 +6,11 @@ class FakeRetriever:
     def __init__(self, hits):
         self.hits = hits
         self.calls = []
+        self.scopes = []
 
-    def retrieve(self, question, *, course_code, top_k):
+    def retrieve(self, question, *, course_code, top_k, **kwargs):
         self.calls.append((question, course_code, top_k))
+        self.scopes.append(kwargs.get("document_ids"))
         return self.hits
 
 
@@ -42,6 +44,7 @@ def test_service_falls_back_to_model_knowledge_without_hits() -> None:
     assert result["model"] == "deepseek-chat"
     assert llm.calls == []
     assert llm.general_calls == ["问题"]
+    assert retriever.scopes == [None]
 
 
 def test_service_keeps_no_evidence_answer_when_general_answer_is_empty() -> None:
@@ -88,5 +91,58 @@ def test_service_injects_retriever_and_llm_and_preserves_citation_fields() -> No
         }
     ]
     assert retriever.calls == [("问题", "comp-org", 2)]
+    assert retriever.scopes == [None]
     assert llm.calls == [("问题", hits)]
     assert llm.general_calls == []
+
+
+def test_service_forwards_document_ids_scope_to_retriever() -> None:
+    hits = [
+        {
+            "score": 0.9,
+            "payload": {"document_id": "doc-a", "text": "ADD 控制信号"},
+        }
+    ]
+    retriever = FakeRetriever(hits)
+    llm = FakeLLM()
+
+    result = answer_question(
+        "问题",
+        course_code="CS-DEMO",
+        document_ids=[" doc-a ", "doc-b", "doc-a"],
+        retriever=retriever,
+        llm=llm,
+    )
+
+    assert result["knowledge_sources"] == ["course_materials"]
+    assert retriever.scopes == [["doc-a", "doc-b"]]
+    assert llm.calls == [("问题", hits)]
+
+
+def test_service_normalizes_legacy_document_id_into_document_scope() -> None:
+    retriever = FakeRetriever([])
+
+    answer_question(
+        "问题",
+        course_code="CS-DEMO",
+        document_id=" doc-1 ",
+        retriever=retriever,
+        llm=FakeLLM(),
+    )
+
+    assert retriever.scopes == [["doc-1"]]
+
+
+def test_service_prefers_document_ids_over_legacy_document_id() -> None:
+    retriever = FakeRetriever([])
+
+    answer_question(
+        "问题",
+        course_code="CS-DEMO",
+        document_id="legacy",
+        document_ids=["doc-a", "doc-b"],
+        retriever=retriever,
+        llm=FakeLLM(),
+    )
+
+    assert retriever.scopes == [["doc-a", "doc-b"]]

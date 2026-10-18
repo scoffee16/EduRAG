@@ -11,6 +11,7 @@ from qdrant_client.http import models as qdrant_models
 
 from edurage.core.config import get_settings
 from edurage.rag.keyword_retriever import extract_terms, keyword_score, matched_terms
+from edurage.rag.retriever import normalize_document_ids
 
 logger = logging.getLogger(__name__)
 
@@ -22,6 +23,8 @@ class VectorRetriever(Protocol):
         course_code: str | None = None,
         top_k: int | None = None,
         document_id: str | None = None,
+        *,
+        document_ids: Sequence[str] | None = None,
     ) -> list[dict[str, Any]]: ...
 
 
@@ -32,6 +35,7 @@ class KeywordRetriever(Protocol):
         *,
         course_code: str | None = None,
         document_id: str | None = None,
+        document_ids: Sequence[str] | None = None,
         candidates: Sequence[Mapping[str, Any]] | None = None,
         top_k: int | None = None,
     ) -> list[dict[str, Any]]: ...
@@ -43,6 +47,7 @@ class KeywordCandidateSource(Protocol):
         *,
         course_code: str | None = None,
         document_id: str | None = None,
+        document_ids: Sequence[str] | None = None,
         limit: int,
     ) -> list[dict[str, Any]]: ...
 
@@ -61,8 +66,10 @@ class QdrantKeywordCandidateSource:
         *,
         course_code: str | None = None,
         document_id: str | None = None,
+        document_ids: Sequence[str] | None = None,
         limit: int | None = None,
     ) -> list[dict[str, Any]]:
+        scope = normalize_document_ids(document_ids, document_id)
         scan_limit = min(self.scan_limit, limit or self.scan_limit)
         self.truncated = False
         conditions = []
@@ -73,11 +80,11 @@ class QdrantKeywordCandidateSource:
                     match=qdrant_models.MatchValue(value=course_code),
                 )
             )
-        if document_id is not None:
+        if scope:
             conditions.append(
                 qdrant_models.FieldCondition(
                     key="document_id",
-                    match=qdrant_models.MatchValue(value=document_id),
+                    match=qdrant_models.MatchAny(any=list(scope)),
                 )
             )
         query_filter = qdrant_models.Filter(must=conditions) if conditions else None
@@ -220,15 +227,17 @@ class LocalKeywordRetriever:
         *,
         course_code: str | None = None,
         document_id: str | None = None,
+        document_ids: Sequence[str] | None = None,
         candidates: Sequence[Mapping[str, Any]] | None = None,
         top_k: int | None = None,
     ) -> list[dict[str, Any]]:
+        scope = normalize_document_ids(document_ids, document_id)
         terms = extract_terms(question)
         source_candidates: Sequence[Mapping[str, Any]] = []
         if self.candidate_source is not None:
             source_candidates = self.candidate_source.retrieve(
                 course_code=course_code,
-                document_id=document_id,
+                document_ids=list(scope),
                 limit=self.scan_limit,
             )
             self.last_scan_truncated = bool(
@@ -243,7 +252,7 @@ class LocalKeywordRetriever:
             payload = _payload(original)
             if course_code is not None and payload.get("course_code") != course_code:
                 continue
-            if document_id is not None and payload.get("document_id") != document_id:
+            if scope and payload.get("document_id") not in scope:
                 continue
             hit = dict(original)
             hit["payload"] = dict(payload)
@@ -303,24 +312,29 @@ class HybridRetriever:
         course_code: str | None = None,
         top_k: int | None = None,
         document_id: str | None = None,
+        *,
+        document_ids: Sequence[str] | None = None,
     ) -> list[dict[str, Any]]:
-        if document_id is not None and course_code is None:
-            raise ValueError("course_code is required when document_id is provided")
+        scope = normalize_document_ids(document_ids, document_id)
+        if scope and course_code is None:
+            raise ValueError("course_code is required when document_ids is provided")
         limit = top_k or get_settings().top_k
         candidate_k = max(self.candidate_k, limit)
-        vector_hits = self.vector_retriever.retrieve(
-            question,
-            course_code=course_code,
-            top_k=candidate_k,
-            document_id=document_id,
-        )
-        keyword_hits = self.keyword_retriever.retrieve(
-            question,
-            course_code=course_code,
-            document_id=document_id,
-            candidates=vector_hits,
-            top_k=candidate_k,
-        )
+        vector_kwargs: dict[str, Any] = {
+            "course_code": course_code,
+            "top_k": candidate_k,
+        }
+        if scope:
+            vector_kwargs["document_ids"] = list(scope)
+        vector_hits = self.vector_retriever.retrieve(question, **vector_kwargs)
+        keyword_kwargs: dict[str, Any] = {
+            "course_code": course_code,
+            "candidates": vector_hits,
+            "top_k": candidate_k,
+        }
+        if scope:
+            keyword_kwargs["document_ids"] = list(scope)
+        keyword_hits = self.keyword_retriever.retrieve(question, **keyword_kwargs)
         hits = fuse_results(
             vector_hits,
             keyword_hits,

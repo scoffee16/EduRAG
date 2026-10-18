@@ -30,6 +30,17 @@ class FakeKeywordRetriever:
         return self.hits if self.hits is not None else []
 
 
+class FilteringVectorRetriever(FakeVectorRetriever):
+    """Fake vector retriever that honours the document scope like Qdrant does."""
+
+    def retrieve(self, question: str, **kwargs: Any) -> list[dict[str, Any]]:
+        hits = super().retrieve(question, **kwargs)
+        scope = kwargs.get("document_ids")
+        if not scope:
+            return hits
+        return [hit for hit in hits if hit["payload"]["document_id"] in scope]
+
+
 def _hit(
     document_id: str,
     page: int,
@@ -87,7 +98,8 @@ def test_hybrid_merges_filters_uses_candidate_k_and_preserves_slide_metadata() -
     assert hits[0]["keyword_score"] == 0.9
     assert vector.calls[0]["top_k"] == 12
     assert vector.calls[0]["course_code"] == "CS-DEMO"
-    assert vector.calls[0]["document_id"] == "doc-b"
+    assert vector.calls[0]["document_ids"] == ["doc-b"]
+    assert "document_id" not in vector.calls[0]
 
 
 def test_exact_terminology_can_raise_correct_candidate_above_generic_hit() -> None:
@@ -113,6 +125,97 @@ def test_top_k_limits_after_fusion_and_document_id_requires_course() -> None:
         assert "course_code is required" in str(exc)
     else:
         raise AssertionError("document_id without course_code must fail")
+    try:
+        hybrid.retrieve("PC", document_ids=["doc-a", "doc-b"])
+    except ValueError as exc:
+        assert "course_code is required" in str(exc)
+    else:
+        raise AssertionError("document_ids without course_code must fail")
+
+
+def test_hybrid_forwards_document_scope_to_vector_and_keyword_retrievers() -> None:
+    vector = FakeVectorRetriever([_hit("doc-a", 1, 0, "ADD 控制信号", 0.7)])
+    keyword = FakeKeywordRetriever([])
+    hybrid = HybridRetriever(vector, keyword, candidate_k=20)
+
+    hybrid.retrieve("ADD 控制信号", course_code="CS-DEMO", document_ids=["doc-a", "doc-b"])
+
+    assert vector.calls[0]["document_ids"] == ["doc-a", "doc-b"]
+    assert keyword.calls[0]["document_ids"] == ["doc-a", "doc-b"]
+    assert "document_id" not in vector.calls[0]
+    assert "document_id" not in keyword.calls[0]
+
+
+def test_hybrid_multi_document_scope_keeps_only_requested_documents() -> None:
+    vector = FilteringVectorRetriever(
+        [
+            _hit("doc-a", 1, 0, "ADD 控制信号", 0.7),
+            _hit("doc-b", 2, 0, "ADD 微地址", 0.6),
+            _hit("doc-other", 3, 0, "ADD 控制信号", 0.9),
+        ]
+    )
+    hybrid = HybridRetriever(vector, LocalKeywordRetriever(), candidate_k=20)
+
+    hits = hybrid.retrieve(
+        "ADD 控制信号",
+        course_code="CS-DEMO",
+        document_ids=["doc-a", "doc-b"],
+        top_k=5,
+    )
+
+    assert {hit["payload"]["document_id"] for hit in hits} == {"doc-a", "doc-b"}
+
+
+def test_legacy_hybrid_document_id_still_limits_to_one_document() -> None:
+    vector = FilteringVectorRetriever(
+        [
+            _hit("doc-a", 1, 0, "ADD 控制信号", 0.7),
+            _hit("doc-b", 2, 0, "ADD 微地址", 0.6),
+        ]
+    )
+    hybrid = HybridRetriever(vector, LocalKeywordRetriever(), candidate_k=20)
+
+    hits = hybrid.retrieve("ADD 控制信号", course_code="CS-DEMO", document_id="doc-a")
+
+    assert {hit["payload"]["document_id"] for hit in hits} == {"doc-a"}
+
+
+def test_local_keyword_retriever_keeps_any_of_multiple_requested_documents() -> None:
+    candidates = [
+        {
+            "score": 0.9,
+            "payload": {
+                "course_code": "CS-DEMO",
+                "document_id": "doc-a",
+                "text": "ADD 控制信号",
+            },
+        },
+        {
+            "score": 0.5,
+            "payload": {
+                "course_code": "CS-DEMO",
+                "document_id": "doc-b",
+                "text": "ADD 微地址",
+            },
+        },
+        {
+            "score": 0.8,
+            "payload": {
+                "course_code": "CS-DEMO",
+                "document_id": "doc-c",
+                "text": "ADD 控制信号",
+            },
+        },
+    ]
+
+    hits = LocalKeywordRetriever().retrieve(
+        "ADD 控制信号",
+        course_code="CS-DEMO",
+        document_ids=["doc-a", "doc-c"],
+        candidates=candidates,
+    )
+
+    assert [hit["payload"]["document_id"] for hit in hits] == ["doc-a", "doc-c"]
 
 
 def test_empty_results_fall_back_to_model_general_knowledge() -> None:
@@ -175,10 +278,45 @@ def test_independent_keyword_source_uses_payload_only_bounded_filtered_scroll() 
     assert client.calls[0]["with_vectors"] is False
     assert client.calls[0]["limit"] == 7
     query_filter = client.calls[0]["scroll_filter"]
-    assert [(condition.key, condition.match.value) for condition in query_filter.must] == [
-        ("course_code", "CS-DEMO"),
-        ("document_id", "doc-b"),
-    ]
+    filters = {
+        condition.key: (
+            list(condition.match.any)
+            if getattr(condition.match, "any", None) is not None
+            else condition.match.value
+        )
+        for condition in query_filter.must
+    }
+    assert filters == {"course_code": "CS-DEMO", "document_id": ["doc-b"]}
+
+
+def test_independent_keyword_source_limits_scroll_to_multiple_documents() -> None:
+    client = FakeScrollClient(
+        [
+            {
+                "payload": {
+                    "course_code": "CS-DEMO",
+                    "document_id": "doc-b",
+                    "page": 5,
+                    "chunk_index": 0,
+                    "text": "ADD 微地址",
+                }
+            }
+        ]
+    )
+    source = QdrantKeywordCandidateSource(client, "chunks", scan_limit=9)
+
+    source.retrieve(course_code="CS-DEMO", document_ids=["doc-b", "doc-c"], limit=9)
+
+    query_filter = client.calls[0]["scroll_filter"]
+    filters = {
+        condition.key: (
+            list(condition.match.any)
+            if getattr(condition.match, "any", None) is not None
+            else condition.match.value
+        )
+        for condition in query_filter.must
+    }
+    assert filters == {"course_code": "CS-DEMO", "document_id": ["doc-b", "doc-c"]}
 
 
 def test_independent_keyword_source_exposes_scan_truncation() -> None:

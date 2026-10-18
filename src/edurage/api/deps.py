@@ -56,12 +56,14 @@ class RAGService:
         course_code: str | None = None,
         top_k: int | None = None,
         document_id: str | None = None,
+        document_ids: list[str] | None = None,
     ) -> dict[str, Any]:
         return answer_question(
             question,
             course_code,
             top_k,
             document_id=document_id,
+            document_ids=document_ids,
             retriever=self.retriever,
             llm=self.answerer,
             model=self.settings.llm_model,
