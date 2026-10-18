@@ -79,6 +79,12 @@ timeout /t 2 /nobreak >nul
 goto :wait_health
 
 :health_ok
+rem 打开后端日志窗口，便于查看每次请求的 request_id / stage / elapsed_ms / status
+rem 以及 query completed / upload completed / api request failed 等日志。
+echo 打开后端 / LLM 请求日志窗口（上传、问答过程可在此观察）...
+start "EduRAG API 日志（后端 / LLM 请求）" /D "%ROOT%" cmd /k "docker compose logs -f --tail=100 api"
+start "EduRAG 基础设施日志（Postgres / Qdrant / MinIO）" /D "%ROOT%" cmd /k "docker compose logs -f --tail=50 postgres qdrant minio"
+
 where npm >nul 2>&1
 if errorlevel 1 (
     echo [警告] 未找到 npm，无法自动启动前端。
