@@ -1,108 +1,617 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import App from './App'
+import AnswerMarkdown, { sanitizeAnswerText } from './components/AnswerMarkdown'
+import type { CourseSummary, DocumentDetail, DocumentSummary } from './api'
 
-const docs = [{ document_id: 'doc-1', filename: '讲义.pdf', course_code: 'CS-A', file_type: 'pdf', status: 'indexed', page_count: 3, chunk_count: 4, created_at: '2026-10-15T00:00:00Z' }]
+/* -------------------------------------------------------------------------- */
+/*  测试数据                                                                   */
+/* -------------------------------------------------------------------------- */
 
-function response(body: unknown, init?: ResponseInit) {
-  return Promise.resolve(new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' }, ...init }))
+const COURSES: CourseSummary[] = [
+  { code: 'CS-COMP-ORG', name: '计算机组成原理', document_count: 2, chunk_count: 24 },
+  { code: 'CS-OS', name: '操作系统', document_count: 0, chunk_count: 0 },
+]
+
+function makeDocuments(): DocumentSummary[] {
+  return [
+    {
+      document_id: 'doc-1',
+      filename: '讲义.pdf',
+      course_code: 'CS-COMP-ORG',
+      course_name: '计算机组成原理',
+      file_type: 'pdf',
+      status: 'indexed',
+      page_count: 3,
+      chunk_count: 4,
+      created_at: '2026-10-15T00:00:00Z',
+    },
+    {
+      document_id: 'doc-2',
+      filename: '课件.pptx',
+      course_code: 'CS-COMP-ORG',
+      course_name: '计算机组成原理',
+      file_type: 'pptx',
+      status: 'indexed',
+      page_count: 12,
+      chunk_count: 20,
+      created_at: '2026-10-15T00:00:00Z',
+    },
+  ]
 }
 
-beforeEach(() => {
-  vi.stubGlobal('fetch', vi.fn((url: string, options?: RequestInit) => {
-    if (url.includes('/health/ocr')) return response({ status: 'ok', enabled: true, available: true })
-    if (url.includes('/documents') && options?.method === 'DELETE') return response({ document_id: 'doc-1', status: 'deleted' })
-    if (url.includes('/documents')) return response(docs)
-    if (url.includes('/upload')) return response({ document_id: 'new-1', filename: 'new.pdf', pages: 2, chunks: 2, course_code: 'CS-A', status: 'indexed' }, { status: 201 })
-    if (url.includes('/query')) return response({ answer: '答案内容', citations: [{ filename: '讲义.pdf', page: 2, snippet: '<不应执行>', score: 0.81, modality: 'text' }], model: 'mock', latency_ms: 21, request_id: 'req-1' })
-    return response({}, { status: 404 })
-  }))
+function courseDocuments(courseCode: string): DocumentSummary[] {
+  return courseCode === 'CS-COMP-ORG' ? makeDocuments() : []
+}
+
+const DEFAULT_ANSWER = {
+  answer: '**重点**：ADD 指令的微地址序列。\n\n| 步骤 | 说明 |\n| --- | --- |\n| T1 | 取指 |\n\n公式 $E=mc^2$。',
+  citations: [
+    {
+      document_id: 'doc-1',
+      filename: '讲义.pdf',
+      file_type: 'pdf',
+      page: 2,
+      snippet: '<不应执行>',
+      score: 0.81,
+      modality: 'text',
+      block_type: 'text',
+    },
+  ],
+  model: 'mock-model',
+  latency_ms: 21,
+  request_id: 'req-answer-1',
+}
+
+/* -------------------------------------------------------------------------- */
+/*  fetch 路由 mock：覆盖 /health/ocr、/courses、/documents、/upload、/query     */
+/* -------------------------------------------------------------------------- */
+
+interface JsonInit {
+  status?: number
+  headers?: Record<string, string>
+}
+
+function json(body: unknown, init: JsonInit = {}): Response {
+  return new Response(JSON.stringify(body), {
+    status: init.status ?? 200,
+    headers: { 'Content-Type': 'application/json', ...(init.headers ?? {}) },
+  })
+}
+
+interface QueryBody {
+  question: string
+  course_code?: string
+  document_id?: string
+  top_k: number
+}
+
+interface RecordedRequest {
+  url: string
+  method: string
+  body: BodyInit | null | undefined
+}
+
+interface MockHandlers {
+  courses?: () => Response | Promise<Response>
+  documents?: (courseCode: string) => Response | Promise<Response>
+  upload?: (file: File | null) => Response | Promise<Response>
+  documentDetail?: (documentId: string) => Response | Promise<Response>
+  deleteDocument?: (documentId: string) => Response | Promise<Response>
+  query?: (body: QueryBody) => Response | Promise<Response>
+  ocr?: () => Response | Promise<Response>
+}
+
+interface MockServer {
+  requests: RecordedRequest[]
+  /** 符合片段（包含匹配）的请求列表。 */
+  matching: (fragment: string) => RecordedRequest[]
+  /** 符合片段的请求数量。 */
+  count: (fragment: string) => number
+}
+
+function installFetch(handlers: MockHandlers = {}): MockServer {
+  const requests: RecordedRequest[] = []
+
+  const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url =
+      typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+    const method = (init?.method ?? 'GET').toUpperCase()
+    const body = init?.body ?? null
+    requests.push({ url, method, body })
+
+    const parsed = new URL(url, 'http://localhost')
+    const path = parsed.pathname
+
+    if (path.includes('/health/ocr')) {
+      return handlers.ocr?.() ?? json({ status: 'ok', engine: 'tesseract' })
+    }
+
+    if (path.includes('/courses')) {
+      return handlers.courses?.() ?? json(COURSES)
+    }
+
+    if (path.includes('/upload')) {
+      if (handlers.upload) return handlers.upload(body instanceof FormData ? (body.get('file') as File) : null)
+      return json(
+        {
+          document_id: 'doc-new',
+          filename: '绪论.docx',
+          course_code: 'CS-COMP-ORG',
+          status: 'processing',
+        },
+        { status: 202, headers: { 'X-Request-ID': 'req-upload-1' } },
+      )
+    }
+
+    if (path.includes('/documents/')) {
+      const documentId = decodeURIComponent(path.split('/documents/')[1] ?? '')
+      if (method === 'DELETE') {
+        return handlers.deleteDocument?.(documentId) ?? json({ document_id: documentId, status: 'deleted' })
+      }
+      if (handlers.documentDetail) return handlers.documentDetail(documentId)
+      const found = makeDocuments().find((document) => document.document_id === documentId)
+      if (!found) return json({ error: { code: 'not_found', message: '文档不存在' } }, { status: 404 })
+      return json({ ...found, status: 'indexed', progress: null, request_id: 'req-detail-1' })
+    }
+
+    if (path.includes('/documents')) {
+      const courseCode = parsed.searchParams.get('course_code') ?? ''
+      return handlers.documents?.(courseCode) ?? json(courseDocuments(courseCode))
+    }
+
+    if (path.includes('/query')) {
+      const queryBody =
+        typeof body === 'string' ? (JSON.parse(body) as QueryBody) : ({} as QueryBody)
+      return handlers.query?.(queryBody) ?? json(DEFAULT_ANSWER)
+    }
+
+    return json({ error: { code: 'not_found', message: `未 mock 的接口：${url}` } }, { status: 404 })
+  })
+
+  vi.stubGlobal('fetch', fetchMock)
+
+  const matching = (fragment: string) => requests.filter((request) => request.url.includes(fragment))
+  return { requests, matching, count: (fragment: string) => matching(fragment).length }
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  const promise = new Promise<T>((res) => {
+    resolve = res
+  })
+  return { promise, resolve }
+}
+
+function uploadInput(): HTMLInputElement {
+  const input = document.getElementById('file-upload')
+  if (!(input instanceof HTMLInputElement)) throw new Error('未找到文件上传输入框')
+  return input
+}
+
+function chooseFile(file: File) {
+  fireEvent.change(uploadInput(), { target: { files: [file] } })
+}
+
+const PDF_FILE = () =>
+  new File(['pdf'], '绪论.pdf', { type: 'application/pdf' })
+const DOCX_FILE = () =>
+  new File(['docx'], '绪论.docx', {
+    type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  })
+
+function sleep(ms: number) {
+  return new Promise<void>((resolve) => setTimeout(resolve, ms))
+}
+
+afterEach(() => {
+  vi.unstubAllGlobals()
+  vi.restoreAllMocks()
 })
 
-afterEach(() => vi.restoreAllMocks())
+/* -------------------------------------------------------------------------- */
+/*  页面级交互                                                                 */
+/* -------------------------------------------------------------------------- */
 
-describe('EduRAG workflow', () => {
-  it('loads documents and clears selected document when course changes', async () => {
-    const user = userEvent.setup()
+describe('EduRAG 前端工作流', () => {
+  it('加载课程与文档：默认选中第一门课程、展示课程名+代码与 OCR 状态', async () => {
+    const server = installFetch()
     render(<App />)
+
+    expect(await screen.findByText('讲义.pdf')).toBeInTheDocument()
+    expect(await screen.findByText('课件.pptx')).toBeInTheDocument()
+    expect(screen.getByTestId('ocr-status')).toHaveTextContent('OCR 可用')
+    expect(screen.getByText('计算机组成原理（CS-COMP-ORG）')).toBeInTheDocument()
+    expect(screen.getAllByText('计算机组成原理 · CS-COMP-ORG')).toHaveLength(2)
+    expect(
+      screen.getByRole('option', { name: '计算机组成原理（CS-COMP-ORG）· 2 篇文档' }),
+    ).toBeInTheDocument()
+    expect(server.count('/api/v1/documents?course_code=CS-COMP-ORG')).toBe(1)
+  })
+
+  it('切换课程会重新加载文档、清空选中文档与上一次回答', async () => {
+    const user = userEvent.setup()
+    const server = installFetch()
+    render(<App />)
+
     await screen.findByText('讲义.pdf')
     await user.click(screen.getByText('讲义.pdf'))
     expect(screen.getByText(/单份文档/)).toBeInTheDocument()
-    await user.clear(screen.getByLabelText('课程代码'))
-    await user.type(screen.getByLabelText('课程代码'), 'CS-B')
-    expect(screen.getByText(/全课程/)).toBeInTheDocument()
-  })
+    expect(screen.getByText(/问答将限定在/)).toBeInTheDocument()
 
-  it('requires confirmation before deleting', async () => {
-    const user = userEvent.setup()
-    vi.stubGlobal('confirm', vi.fn(() => false))
-    render(<App />)
-    await screen.findByText('讲义.pdf')
-    await user.click(screen.getByTitle('删除 讲义.pdf'))
-    expect(window.confirm).toHaveBeenCalled()
-    expect(fetch).not.toHaveBeenCalledWith('/api/v1/documents/doc-1', expect.objectContaining({ method: 'DELETE' }))
-  })
-
-  it('deletes after confirmation and refreshes the list', async () => {
-    const user = userEvent.setup()
-    vi.stubGlobal('confirm', vi.fn(() => true))
-    render(<App />)
-    await screen.findByText('讲义.pdf')
-    await user.click(screen.getByTitle('删除 讲义.pdf'))
-    await waitFor(() => expect(window.confirm).toHaveBeenCalled())
-    expect(fetch).toHaveBeenCalledWith('/api/v1/documents/doc-1', expect.objectContaining({ method: 'DELETE' }))
-  })
-
-  it('shows upload errors without claiming OCR success', async () => {
-    const user = userEvent.setup()
-    vi.stubGlobal('fetch', vi.fn((url: string) => {
-      if (url.includes('/health/ocr')) return response({ status: 'disabled' })
-      if (url.includes('/documents')) return response([])
-      if (url.includes('/upload')) return response({ detail: 'Only PDF files are accepted' }, { status: 400 })
-      return response({})
-    }))
-    render(<App />)
-    const input = screen.getByLabelText(/选择或拖入/)
-    fireEvent.change(input, { target: { files: [new File(['slides'], 'slides.pptx', { type: 'application/vnd.openxmlformats-officedocument.presentationml.presentation' })] } })
-    await user.click(screen.getByRole('button', { name: '上传并建立索引' }))
-    await waitFor(() => expect(screen.getByText('Only PDF files are accepted')).toBeInTheDocument())
-    expect(screen.queryByText('OCR 已成功')).not.toBeInTheDocument()
-  })
-
-  it('shows query errors with retry guidance and request id', async () => {
-    const user = userEvent.setup()
-    vi.stubGlobal('fetch', vi.fn((url: string) => {
-      if (url.includes('/health/ocr')) return response({ status: 'ok' })
-      if (url.includes('/documents')) return response([])
-      if (url.includes('/query')) return response({ error: { code: 'busy', message: '服务繁忙' }, request_id: 'req-429' }, { status: 429 })
-      return response({})
-    }))
-    render(<App />)
     await user.type(screen.getByPlaceholderText(/ADD 指令/), '这个问题')
     await user.click(screen.getByRole('button', { name: '开始问答' }))
-    await waitFor(() => expect(screen.getByText('服务繁忙 请稍后重试。')).toBeInTheDocument())
+
+    expect(await screen.findByText('重点')).toBeInTheDocument()
+    expect(screen.getByText('req-answer-1')).toBeInTheDocument()
+    const queryRequest = server.matching('/api/v1/query')[0]
+    expect(JSON.parse(String(queryRequest.body))).toMatchObject({
+      question: '这个问题',
+      course_code: 'CS-COMP-ORG',
+      document_id: 'doc-1',
+      top_k: 5,
+    })
+
+    await user.selectOptions(screen.getByLabelText('课程'), 'CS-OS')
+
+    await waitFor(() => expect(screen.getByText(/全课程/)).toBeInTheDocument())
+    expect(screen.queryByTestId('answer-markdown')).not.toBeInTheDocument()
+    expect(screen.queryByText(/问答将限定在/)).not.toBeInTheDocument()
+    expect(await screen.findByText('该课程还没有文档')).toBeInTheDocument()
+    expect(server.count('/api/v1/documents?course_code=CS-OS')).toBe(1)
+  })
+
+  it('支持手动新建课程代码，并按输入的代码加载文档', async () => {
+    const user = userEvent.setup()
+    const server = installFetch()
+    render(<App />)
+
+    await screen.findByText('讲义.pdf')
+    await user.selectOptions(screen.getByLabelText('课程'), '__manual__')
+
+    const manualInput = await screen.findByLabelText('新课程代码')
+    await user.type(manualInput, 'cs-sys')
+    expect(manualInput).toHaveValue('CS-SYS')
+
+    await waitFor(
+      () => expect(server.count('/api/v1/documents?course_code=CS-SYS')).toBe(1),
+      { timeout: 2000 },
+    )
+  })
+
+  it('课程列表为空时进入手动新建课程模式', async () => {
+    installFetch({ courses: () => json([]) })
+    render(<App />)
+
+    expect(await screen.findByLabelText('新课程代码')).toBeInTheDocument()
+    expect(screen.getByText('该课程还没有文档')).toBeInTheDocument()
+  })
+
+  it('文档列表加载中展示骨架屏，返回后渲染列表', async () => {
+    const pendingDocuments = deferred<Response>()
+    installFetch({ documents: () => pendingDocuments.promise })
+    render(<App />)
+
+    expect(await screen.findByTestId('document-skeleton')).toBeInTheDocument()
+
+    await act(async () => {
+      pendingDocuments.resolve(json(makeDocuments()))
+    })
+
+    expect(await screen.findByText('讲义.pdf')).toBeInTheDocument()
+    await waitFor(() => expect(screen.queryByTestId('document-skeleton')).not.toBeInTheDocument())
+  })
+
+  it('上传返回 202 后轮询进度：展示阶段进度条，indexed 后刷新课程与文档', async () => {
+    const user = userEvent.setup()
+    let documents = makeDocuments()
+    let detailCalls = 0
+    const indexedDetail: DocumentDetail = {
+      document_id: 'doc-new',
+      filename: '绪论.docx',
+      course_code: 'CS-COMP-ORG',
+      file_type: 'docx',
+      status: 'indexed',
+      progress: null,
+      page_count: 5,
+      chunk_count: 30,
+    }
+    const server = installFetch({
+      documents: () => json(documents),
+      upload: () =>
+        json(
+          {
+            document_id: 'doc-new',
+            filename: '绪论.docx',
+            course_code: 'CS-COMP-ORG',
+            status: 'processing',
+          },
+          { status: 202, headers: { 'X-Request-ID': 'req-upload-1' } },
+        ),
+      documentDetail: () => {
+        detailCalls += 1
+        if (detailCalls === 1) {
+          return json(
+            {
+              document_id: 'doc-new',
+              filename: '绪论.docx',
+              course_code: 'CS-COMP-ORG',
+              file_type: 'docx',
+              status: 'processing',
+              progress: { stage: 'embed', done: 3, total: 10 },
+            },
+            { headers: { 'X-Request-ID': 'req-detail-1' } },
+          )
+        }
+        documents = [...documents, indexedDetail as unknown as DocumentSummary]
+        return json(indexedDetail, { headers: { 'X-Request-ID': 'req-detail-2' } })
+      },
+    })
+
+    render(<App pollIntervalMs={150} />)
+    await screen.findByText('讲义.pdf')
+
+    chooseFile(DOCX_FILE())
+    await user.click(screen.getByRole('button', { name: '上传并建立索引' }))
+
+    expect(
+      await screen.findByRole('button', { name: '正在解析并向量化，大文件可能需要数分钟' }),
+    ).toBeDisabled()
+    expect(await screen.findByText('向量化 3/10')).toBeInTheDocument()
+    const progressBar = document.querySelector('.progress-bar') as HTMLElement
+    expect(progressBar.style.width).toBe('56%')
+
+    expect(await screen.findByText('文档已建立索引')).toBeInTheDocument()
+    expect(await screen.findByText('绪论.docx')).toBeInTheDocument()
+    expect(screen.getByText('5 节 · 30 chunks · indexed')).toBeInTheDocument()
+    await waitFor(() => expect(server.count('/api/v1/courses')).toBeGreaterThanOrEqual(2))
+    expect(server.count('/api/v1/documents?course_code=CS-COMP-ORG')).toBeGreaterThanOrEqual(2)
+  })
+
+  it('文档处理 failed 时展示 error_code 与 request_id，并允许重试上传', async () => {
+    const user = userEvent.setup()
+    installFetch({
+      upload: () =>
+        json(
+          {
+            document_id: 'doc-bad',
+            filename: '坏文档.pdf',
+            course_code: 'CS-COMP-ORG',
+            status: 'processing',
+          },
+          { status: 202, headers: { 'X-Request-ID': 'req-upload-bad' } },
+        ),
+      documentDetail: () =>
+        json(
+          {
+            document_id: 'doc-bad',
+            filename: '坏文档.pdf',
+            course_code: 'CS-COMP-ORG',
+            file_type: 'pdf',
+            status: 'failed',
+            progress: null,
+            error_code: 'parse_error',
+          },
+          { headers: { 'X-Request-ID': 'req-detail-fail' } },
+        ),
+    })
+    render(<App pollIntervalMs={10} />)
+
+    await screen.findByText('讲义.pdf')
+    chooseFile(PDF_FILE())
+    await user.click(screen.getByRole('button', { name: '上传并建立索引' }))
+
+    expect(await screen.findByText('文档处理失败（parse_error）')).toBeInTheDocument()
+    expect(screen.getByText('req-detail-fail')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '重试上传' })).toBeEnabled()
+  })
+
+  it('轮询超时后展示 10 分钟超时提示与 request_id', async () => {
+    const user = userEvent.setup()
+    installFetch({
+      upload: () =>
+        json(
+          {
+            document_id: 'doc-slow',
+            filename: '慢文档.pdf',
+            course_code: 'CS-COMP-ORG',
+            status: 'processing',
+          },
+          { status: 202, headers: { 'X-Request-ID': 'req-upload-timeout' } },
+        ),
+      documentDetail: () =>
+        json({
+          document_id: 'doc-slow',
+          filename: '慢文档.pdf',
+          course_code: 'CS-COMP-ORG',
+          file_type: 'pdf',
+          status: 'processing',
+          progress: { stage: 'parse', done: 0, total: 0 },
+        }),
+    })
+    render(<App pollIntervalMs={15} uploadTimeoutMs={60} />)
+
+    await screen.findByText('讲义.pdf')
+    chooseFile(PDF_FILE())
+    await user.click(screen.getByRole('button', { name: '上传并建立索引' }))
+
+    expect(
+      await screen.findByText('处理超时（超过 10 分钟）', {}, { timeout: 4000 }),
+    ).toBeInTheDocument()
+    expect(screen.getByText('req-upload-timeout')).toBeInTheDocument()
+  })
+
+  it('可以中止上传进度轮询', async () => {
+    const user = userEvent.setup()
+    const server = installFetch({
+      upload: () =>
+        json(
+          {
+            document_id: 'doc-slow',
+            filename: '慢文档.pdf',
+            course_code: 'CS-COMP-ORG',
+            status: 'processing',
+          },
+          { status: 202 },
+        ),
+      documentDetail: () =>
+        json({
+          document_id: 'doc-slow',
+          filename: '慢文档.pdf',
+          course_code: 'CS-COMP-ORG',
+          file_type: 'pdf',
+          status: 'processing',
+          progress: { stage: 'chunk', done: 0, total: 0 },
+        }),
+    })
+    render(<App pollIntervalMs={300} />)
+
+    await screen.findByText('讲义.pdf')
+    chooseFile(PDF_FILE())
+    await user.click(screen.getByRole('button', { name: '上传并建立索引' }))
+    await screen.findByText('切分文本块中…')
+
+    await user.click(screen.getByRole('button', { name: '中止轮询' }))
+    expect(await screen.findByText('已中止进度轮询')).toBeInTheDocument()
+
+    const callsAfterCancel = server.count('/api/v1/documents/doc-slow')
+    await sleep(450)
+    expect(server.count('/api/v1/documents/doc-slow')).toBe(callsAfterCancel)
+  })
+
+  it('上传接口报错时展示错误信息、错误码与 request_id', async () => {
+    const user = userEvent.setup()
+    installFetch({
+      upload: () =>
+        json(
+          {
+            error: { code: 'unsupported_file', message: '不支持的文件类型' },
+            request_id: 'req-upload-error',
+          },
+          { status: 400 },
+        ),
+    })
+    render(<App />)
+
+    await screen.findByText('讲义.pdf')
+    chooseFile(PDF_FILE())
+    await user.click(screen.getByRole('button', { name: '上传并建立索引' }))
+
+    expect(await screen.findByText('上传失败')).toBeInTheDocument()
+    expect(screen.getByText('不支持的文件类型')).toBeInTheDocument()
+    expect(screen.getByText('错误码 unsupported_file')).toBeInTheDocument()
+    expect(screen.getByText('req-upload-error')).toBeInTheDocument()
+  })
+
+  it('上传区域支持 PDF / PPTX / DOCX，旧版 .doc 给出另存为 .docx 的引导', async () => {
+    installFetch()
+    render(<App />)
+
+    await screen.findByText('讲义.pdf')
+    expect(screen.getByText('选择或拖入 PDF / PPTX / DOCX')).toBeInTheDocument()
+    expect(uploadInput().accept).toContain('.docx')
+
+    chooseFile(new File(['doc'], '旧讲义.doc', { type: 'application/msword' }))
+    expect(await screen.findByText('暂不支持旧版 .doc')).toBeInTheDocument()
+    expect(screen.getByText('请用 Word / WPS 另存为 .docx 后再上传。')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '上传并建立索引' })).toBeDisabled()
+  })
+
+  it('删除文档需要确认，确认后调用 DELETE 并刷新列表', async () => {
+    const user = userEvent.setup()
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
+    const server = installFetch()
+    render(<App />)
+
+    await screen.findByText('讲义.pdf')
+    await user.click(screen.getByTitle('删除 讲义.pdf'))
+
+    expect(confirm).toHaveBeenCalled()
+    expect(server.matching('/api/v1/documents/doc-1').some((request) => request.method === 'DELETE')).toBe(false)
+
+    confirm.mockReturnValue(true)
+    await user.click(screen.getByTitle('删除 讲义.pdf'))
+
+    await waitFor(() =>
+      expect(
+        server.matching('/api/v1/documents/doc-1').some((request) => request.method === 'DELETE'),
+      ).toBe(true),
+    )
+    expect(server.count('/api/v1/courses')).toBeGreaterThanOrEqual(2)
+  })
+
+  it('问答失败（429）展示错误与 request_id，并提示稍后重试', async () => {
+    const user = userEvent.setup()
+    installFetch({
+      query: () =>
+        json(
+          { error: { code: 'busy', message: '服务繁忙' }, request_id: 'req-429' },
+          { status: 429 },
+        ),
+    })
+    render(<App />)
+
+    await screen.findByText('讲义.pdf')
+    await user.type(screen.getByPlaceholderText(/ADD 指令/), '这个问题')
+    await user.click(screen.getByRole('button', { name: '开始问答' }))
+
+    expect(await screen.findByText('问答失败')).toBeInTheDocument()
+    expect(screen.getByText('服务繁忙 请稍后重试。')).toBeInTheDocument()
     expect(screen.getByText('req-429')).toBeInTheDocument()
   })
 
-  it('renders query citations as text and surfaces query errors', async () => {
-    const user = userEvent.setup()
+  it('OCR 健康检查返回 503 时展示 OCR 不可用警告', async () => {
+    installFetch({
+      ocr: () => json({ status: 'unavailable', error: 'tesseract missing' }, { status: 503 }),
+    })
     render(<App />)
-    await screen.findByText('讲义.pdf')
-    await user.type(screen.getByPlaceholderText(/ADD 指令/), '这个问题')
-    await user.click(screen.getByRole('button', { name: '开始问答' }))
-    await waitFor(() => expect(screen.getByText('答案内容')).toBeInTheDocument())
-    expect(screen.getByText('<不应执行>')).toBeInTheDocument()
-    expect(screen.getByText('score 0.810')).toBeInTheDocument()
+
+    const warnings = await screen.findAllByText(/OCR 不可用/)
+    expect(warnings.length).toBeGreaterThan(0)
+    expect(screen.getByTestId('ocr-status')).toHaveTextContent('OCR 不可用')
+  })
+})
+
+/* -------------------------------------------------------------------------- */
+/*  Markdown / LaTeX 渲染                                                      */
+/* -------------------------------------------------------------------------- */
+
+describe('AnswerMarkdown', () => {
+  it('渲染 GFM 表格、Markdown 强调与 LaTeX 公式', async () => {
+    render(
+      <AnswerMarkdown
+        content={
+          '**重点** 内容\n\n| 步骤 | 说明 |\n| --- | --- |\n| T1 | 取指 |\n\n公式 $E=mc^2$。'
+        }
+      />,
+    )
+
+    expect(await screen.findByText('重点')).toBeInTheDocument()
+    expect(screen.getByText('重点').tagName).toBe('STRONG')
+    expect(screen.getByText('取指').tagName).toBe('TD')
+    expect(document.querySelector('.katex')).not.toBeNull()
+    expect(screen.getByTestId('answer-markdown')).toBeInTheDocument()
   })
 
-  it('shows OCR unavailable warning for HTTP 503', async () => {
-    vi.stubGlobal('fetch', vi.fn((url: string) => {
-      if (url.includes('/health/ocr')) return response({ status: 'unavailable', error: 'tesseract missing' }, { status: 503 })
-      if (url.includes('/documents')) return response([])
-      return response({}, { status: 200 })
-    }))
-    render(<App />)
-    await waitFor(() => expect(screen.getByText(/OCR 不可用/)).toBeInTheDocument())
+  it('skipHtml 禁止答案中的原始 HTML（防 XSS）', () => {
+    const { container } = render(
+      <AnswerMarkdown
+        content={'<script>window.__hacked = 1</script>\n\n<img src="x" onerror="window.__hacked = 2">\n\n**安全文本**'}
+      />,
+    )
+
+    expect((window as unknown as { __hacked?: number }).__hacked).toBeUndefined()
+    expect(container.querySelector('script')).toBeNull()
+    expect(container.querySelector('img')).toBeNull()
+    expect(screen.getByText('安全文本')).toBeInTheDocument()
+  })
+
+  it('清洗会破坏渲染管线的控制字符', () => {
+    expect(sanitizeAnswerText('A\u0000B\u0001C\u007F')).toBe('A B C ')
+    expect(sanitizeAnswerText('保留\t制表与\n换行')).toBe('保留\t制表与\n换行')
+
+    render(<AnswerMarkdown content={'前\u0000后'} />)
+    expect(screen.getByText('前 后')).toBeInTheDocument()
   })
 })

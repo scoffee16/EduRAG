@@ -1,16 +1,39 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react'
+import { FileText, Server } from 'lucide-react'
 import {
-  AlertCircle, Check, ChevronDown, CircleHelp, FileText, LoaderCircle, MessageSquare,
-  RefreshCw, Search, Server, Trash2, UploadCloud, X,
-} from 'lucide-react'
-import {
-  ApiError, askQuestion, deleteDocument, DocumentSummary, getDocuments, getOcrHealth,
-  QueryResponse, uploadDocument,
+  ApiError,
+  askQuestion,
+  deleteDocument,
+  getCourses,
+  getDocument,
+  getDocuments,
+  getOcrHealth,
+  uploadDocument,
+  type CourseSummary,
+  type DocumentDetail,
+  type DocumentProgress,
+  type DocumentSummary,
+  type OcrHealth,
+  type QueryResponse,
 } from './api'
+import { fileExtension } from './format'
+import AskPanel from './components/AskPanel'
+import CourseSelect from './components/CourseSelect'
+import DocumentList from './components/DocumentList'
+import StatusNotice from './components/StatusNotice'
+import UploadPanel, { type UploadPhase } from './components/UploadPanel'
 
-const DEFAULT_COURSE = 'CS-COMP-ORG'
+const DEFAULT_POLL_INTERVAL_MS = 1500
+const DEFAULT_UPLOAD_TIMEOUT_MS = 10 * 60 * 1000
 
-function errorText(error: unknown) {
+export interface AppProps {
+  /** 上传进度轮询间隔，测试可调小；生产默认 1.5s。 */
+  pollIntervalMs?: number
+  /** 上传进度超时时间，测试可调小；生产默认 10 分钟。 */
+  uploadTimeoutMs?: number
+}
+
+export function errorText(error: unknown) {
   if (error instanceof ApiError) {
     const retry = error.status === 429 || error.status === 503 ? ' 请稍后重试。' : ''
     return `${error.message}${retry}`
@@ -18,92 +41,276 @@ function errorText(error: unknown) {
   return error instanceof Error ? error.message : '网络请求失败，请检查服务是否运行。'
 }
 
-function formatType(type: string) {
-  return type.toLowerCase() === 'pptx' ? 'PPTX' : 'PDF'
+interface UploadJob {
+  document_id: string
+  filename: string
+  course_code: string
+  request_id?: string | null
+  started_at: number
 }
 
-export default function App() {
-  const [courseCode, setCourseCode] = useState(DEFAULT_COURSE)
+const BUSY_PHASES: UploadPhase[] = ['uploading', 'processing']
+
+/**
+ * 页面状态编排：
+ * - 课程下拉（GET /api/v1/courses）→ 切换即重载文档、清空选中与上一次回答；
+ * - 上传（POST /api/v1/upload，202）→ 每 1.5s 轮询 GET /api/v1/documents/{id}
+ *   展示 parse/chunk/embed/store 阶段进度，indexed 后刷新课程与文档；
+ * - 问答（POST /api/v1/query）→ Markdown / LaTeX 渲染答案与来源。
+ */
+export default function App({
+  pollIntervalMs = DEFAULT_POLL_INTERVAL_MS,
+  uploadTimeoutMs = DEFAULT_UPLOAD_TIMEOUT_MS,
+}: AppProps = {}) {
+  const [courses, setCourses] = useState<CourseSummary[]>([])
+  const [coursesState, setCoursesState] = useState<'loading' | 'ready' | 'error'>('loading')
+  const [coursesError, setCoursesError] = useState('')
+  const [manualCourse, setManualCourse] = useState(false)
+  const [courseCode, setCourseCode] = useState('')
+
   const [documents, setDocuments] = useState<DocumentSummary[]>([])
-  const [selectedDocument, setSelectedDocument] = useState('')
-  const [file, setFile] = useState<File | null>(null)
-  const [uploadState, setUploadState] = useState<'idle' | 'loading' | 'success' | 'error'>('idle')
-  const [uploadMessage, setUploadMessage] = useState('')
-  const [uploadResult, setUploadResult] = useState<{ id: string; pages: number; chunks: number } | null>(null)
   const [listState, setListState] = useState<'idle' | 'loading' | 'error'>('idle')
   const [listError, setListError] = useState('')
-  const [ocr, setOcr] = useState<{ status: string; error?: string | null } | null>(null)
+  const [selectedDocument, setSelectedDocument] = useState('')
+
+  const [ocr, setOcr] = useState<OcrHealth | null>(null)
   const [ocrState, setOcrState] = useState<'loading' | 'ready' | 'error'>('loading')
+
+  const [file, setFile] = useState<File | null>(null)
+  const [uploadPhase, setUploadPhase] = useState<UploadPhase>('idle')
+  const [uploadProgress, setUploadProgress] = useState<DocumentProgress | null>(null)
+  const [uploadDetail, setUploadDetail] = useState<DocumentDetail | null>(null)
+  const [uploadError, setUploadError] = useState('')
+  const [uploadErrorCode, setUploadErrorCode] = useState<string | null>(null)
+  const [uploadRequestId, setUploadRequestId] = useState<string | null>(null)
+  const [uploadJob, setUploadJob] = useState<UploadJob | null>(null)
+
   const [question, setQuestion] = useState('')
   const [topK, setTopK] = useState(5)
   const [queryState, setQueryState] = useState<'idle' | 'loading' | 'success' | 'error'>('idle')
-  const [queryError, setQueryError] = useState<{ message: string; requestId?: string }>({ message: '' })
+  const [queryError, setQueryError] = useState<{ message: string; requestId?: string }>({
+    message: '',
+  })
   const [answer, setAnswer] = useState<QueryResponse | null>(null)
+
   const listRequest = useRef<AbortController | null>(null)
   const queryRequest = useRef<AbortController | null>(null)
+  const courseRef = useRef(courseCode)
+  courseRef.current = courseCode
+  const uploadBusy = BUSY_PHASES.includes(uploadPhase)
 
-  const loadDocuments = async (course = courseCode) => {
+  const loadCourses = useCallback(async () => {
+    setCoursesState('loading')
+    setCoursesError('')
+    try {
+      const list = await getCourses()
+      setCourses(list)
+      setCoursesState('ready')
+      setManualCourse((manual) => {
+        if (!manual) return manual
+        const current = courseRef.current
+        return !(current && list.some((course) => course.code === current))
+      })
+    } catch (error) {
+      setCoursesState('error')
+      setCoursesError(errorText(error))
+      setManualCourse(true)
+    }
+  }, [])
+
+  const loadDocuments = useCallback(async (course: string) => {
     listRequest.current?.abort()
+    if (!course.trim()) {
+      setDocuments([])
+      setSelectedDocument('')
+      setListState('idle')
+      setListError('')
+      return
+    }
     const controller = new AbortController()
     listRequest.current = controller
     setListState('loading')
     setListError('')
     try {
       const next = await getDocuments(course.trim(), controller.signal)
-      if (!controller.signal.aborted) {
-        setDocuments(next)
-        setSelectedDocument((current) => next.some((doc) => doc.document_id === current) ? current : '')
-        setListState('idle')
-      }
+      if (controller.signal.aborted) return
+      setDocuments(next)
+      setSelectedDocument((current) =>
+        next.some((document) => document.document_id === current) ? current : '',
+      )
+      setListState('idle')
     } catch (error) {
-      if ((error as Error).name !== 'AbortError') {
-        setListState('error')
-        setListError(errorText(error))
-      }
+      if ((error as Error).name === 'AbortError') return
+      setListState('error')
+      setListError(errorText(error))
     }
-  }
+  }, [])
 
+  // 首次挂载：课程列表 + OCR 状态
   useEffect(() => {
-    void loadDocuments(DEFAULT_COURSE)
     const controller = new AbortController()
-    getOcrHealth(controller.signal).then((data) => {
-      setOcr(data)
-      setOcrState('ready')
-    }).catch(() => setOcrState('error'))
+    void loadCourses()
+    getOcrHealth(controller.signal)
+      .then((data) => {
+        setOcr(data)
+        setOcrState('ready')
+      })
+      .catch((error: unknown) => {
+        if ((error as Error).name !== 'AbortError') setOcrState('error')
+      })
     return () => {
       controller.abort()
       listRequest.current?.abort()
       queryRequest.current?.abort()
     }
-  }, [])
+  }, [loadCourses])
 
-  const onCourseChange = (value: string) => {
-    setCourseCode(value)
+  // 课程列表就绪后默认选中第一门课程；没有课程则进入手动新建模式
+  const initializedCourse = useRef(false)
+  useEffect(() => {
+    if (initializedCourse.current || coursesState !== 'ready') return
+    initializedCourse.current = true
+    if (courses.length > 0) setCourseCode(courses[0].code)
+    else setManualCourse(true)
+  }, [coursesState, courses])
+
+  // 切换课程：立即重载文档列表，并清空选中文档与上一次回答
+  useEffect(() => {
     setSelectedDocument('')
     setAnswer(null)
-  }
-
-  const submitUpload = async () => {
-    if (!file || !courseCode.trim()) return
-    setUploadState('loading')
-    setUploadMessage('')
-    setUploadResult(null)
-    try {
-      const result = await uploadDocument(file, courseCode.trim())
-      setUploadState('success')
-      setUploadResult({ id: result.document_id, pages: result.pages, chunks: result.chunks })
-      setUploadMessage(`已完成 ${formatType(file.name.split('.').pop() ?? '')} 文本解析`)
-      setFile(null)
-      await loadDocuments(courseCode.trim())
-    } catch (error) {
-      setUploadState('error')
-      setUploadMessage(errorText(error))
+    setQueryState('idle')
+    setQueryError({ message: '' })
+    if (!courseCode.trim()) {
+      void loadDocuments('')
+      return
     }
+    if (!manualCourse) {
+      void loadDocuments(courseCode)
+      return
+    }
+    // 手动输入课程代码时防抖，避免每输入一个字符都请求一次
+    const timer = window.setTimeout(() => void loadDocuments(courseCode), 400)
+    return () => window.clearTimeout(timer)
+  }, [courseCode, manualCourse, loadDocuments])
+
+  // 上传成功后轮询进度（1.5s 一次），indexed 刷新课程+文档，failed/超时给出可操作提示
+  useEffect(() => {
+    if (!uploadJob) return
+    const controller = new AbortController()
+    let stopped = false
+    let timer: number | undefined
+    const deadline = uploadJob.started_at + uploadTimeoutMs
+
+    const stopPolling = () => {
+      stopped = true
+      if (timer != null) window.clearTimeout(timer)
+      setUploadJob(null)
+    }
+
+    const poll = async () => {
+      if (stopped) return
+      if (Date.now() > deadline) {
+        stopPolling()
+        setUploadPhase('timeout')
+        return
+      }
+      try {
+        const detail = await getDocument(uploadJob.document_id, controller.signal)
+        if (stopped) return
+        setUploadDetail(detail)
+        setUploadProgress(detail.progress ?? null)
+        if (detail.request_id) setUploadRequestId(detail.request_id)
+        if (detail.status === 'indexed') {
+          stopped = true
+          setUploadPhase('success')
+          setUploadJob(null)
+          setFile(null)
+          void loadCourses()
+          void loadDocuments(courseRef.current || uploadJob.course_code)
+          return
+        }
+        if (detail.status === 'failed') {
+          stopped = true
+          setUploadPhase('failed')
+          setUploadErrorCode(detail.error_code ?? null)
+          setUploadJob(null)
+          void loadDocuments(courseRef.current || uploadJob.course_code)
+          return
+        }
+        timer = window.setTimeout(() => void poll(), pollIntervalMs)
+      } catch (error) {
+        if (stopped || (error as Error).name === 'AbortError') return
+        stopped = true
+        setUploadPhase('error')
+        setUploadError(errorText(error))
+        setUploadErrorCode(error instanceof ApiError ? error.code ?? null : null)
+        setUploadRequestId(error instanceof ApiError ? (error.requestId ?? null) : null)
+        setUploadJob(null)
+      }
+    }
+
+    void poll()
+    return () => {
+      stopped = true
+      controller.abort()
+      if (timer != null) window.clearTimeout(timer)
+    }
+  }, [uploadJob, pollIntervalMs, uploadTimeoutMs, loadCourses, loadDocuments])
+
+  const submitUpload = useCallback(async () => {
+    if (!file || !courseCode.trim() || uploadBusy) return
+    const uploadFile = file
+    const course = courseCode.trim()
+    setUploadPhase('uploading')
+    setUploadProgress(null)
+    setUploadDetail(null)
+    setUploadError('')
+    setUploadErrorCode(null)
+    setUploadRequestId(null)
+    try {
+      const result = await uploadDocument(uploadFile, course)
+      const filename = result.filename || uploadFile.name
+      const requestId = result.request_id ?? null
+      setUploadRequestId(requestId)
+      setUploadDetail({
+        document_id: result.document_id,
+        filename,
+        course_code: result.course_code || course,
+        file_type: fileExtension(filename),
+        status: result.status || 'processing',
+        progress: null,
+      })
+      setUploadPhase('processing')
+      setUploadJob({
+        document_id: result.document_id,
+        filename,
+        course_code: result.course_code || course,
+        request_id: requestId,
+        started_at: Date.now(),
+      })
+    } catch (error) {
+      setUploadPhase('error')
+      setUploadError(errorText(error))
+      setUploadErrorCode(error instanceof ApiError ? error.code ?? null : null)
+      setUploadRequestId(error instanceof ApiError ? error.requestId ?? null : null)
+      setUploadJob(null)
+    }
+  }, [file, courseCode, uploadBusy])
+
+  const cancelPolling = () => {
+    setUploadPhase('cancelled')
+    setUploadJob(null)
   }
 
-  const submitQuery = async (event: React.FormEvent) => {
-    event.preventDefault()
-    if (!question.trim() || !courseCode.trim()) return
+  const refreshLists = () => {
+    void loadCourses()
+    void loadDocuments(courseRef.current)
+  }
+
+  const submitQuery = async (event?: FormEvent<HTMLFormElement>) => {
+    event?.preventDefault()
+    const code = courseCode.trim()
+    if (!question.trim() || !code || queryState === 'loading') return
     queryRequest.current?.abort()
     const controller = new AbortController()
     queryRequest.current = controller
@@ -111,21 +318,26 @@ export default function App() {
     setQueryError({ message: '' })
     setAnswer(null)
     try {
-      const result = await askQuestion({
-        question: question.trim(),
-        course_code: courseCode.trim(),
-        ...(selectedDocument ? { document_id: selectedDocument } : {}),
-        top_k: topK,
-      }, controller.signal)
+      const result = await askQuestion(
+        {
+          question: question.trim(),
+          course_code: code,
+          ...(selectedDocument ? { document_id: selectedDocument } : {}),
+          top_k: topK,
+        },
+        controller.signal,
+      )
       if (!controller.signal.aborted) {
         setAnswer(result)
         setQueryState('success')
       }
     } catch (error) {
-      if ((error as Error).name !== 'AbortError') {
-        setQueryState('error')
-        setQueryError({ message: errorText(error), requestId: error instanceof ApiError ? error.requestId : undefined })
-      }
+      if ((error as Error).name === 'AbortError') return
+      setQueryState('error')
+      setQueryError({
+        message: errorText(error),
+        requestId: error instanceof ApiError ? error.requestId : undefined,
+      })
     }
   }
 
@@ -133,80 +345,135 @@ export default function App() {
     if (!window.confirm(`确定删除“${document.filename}”吗？此操作不可撤销。`)) return
     try {
       await deleteDocument(document.document_id)
-      if (selectedDocument === document.document_id) setSelectedDocument('')
-      await loadDocuments(courseCode)
+      setSelectedDocument((current) =>
+        current === document.document_id ? '' : current,
+      )
+      void loadCourses()
+      await loadDocuments(courseRef.current)
     } catch (error) {
       setListState('error')
       setListError(errorText(error))
     }
   }
 
+  const selectDocument = (documentId: string) => {
+    setSelectedDocument((current) => (current === documentId ? '' : documentId))
+  }
+
+  const selectedDocumentSummary = documents.find(
+    (document) => document.document_id === selectedDocument,
+  )
+  const currentCourse = courses.find((course) => course.code === courseCode)
+  const ocrLabel =
+    ocrState === 'loading'
+      ? 'OCR 检测中…'
+      : ocrState === 'error'
+        ? 'OCR 无法检测'
+        : ocr?.status === 'ok'
+          ? 'OCR 可用'
+          : ocr?.status === 'disabled'
+            ? 'OCR 已关闭'
+            : 'OCR 不可用'
+
   return (
     <div className="app-shell">
       <header className="topbar">
-        <div className="brand"><div className="brand-mark"><FileText size={19} /></div><div><strong>EduRAG</strong><span>课程知识库</span></div></div>
-        <div className="topbar-meta"><span className="live-dot" /> 本地服务 <span className="separator">/</span> 文档问答工作台</div>
+        <div className="brand">
+          <div className="brand-mark">
+            <FileText size={18} aria-hidden="true" />
+          </div>
+          <div className="brand-text">
+            <strong>EduRAG</strong>
+            <span>课程知识库</span>
+          </div>
+        </div>
+        <CourseSelect
+          courses={courses}
+          value={courseCode}
+          manual={manualCourse}
+          coursesState={coursesState}
+          onSelectCourse={(code) => {
+            setManualCourse(false)
+            setCourseCode(code)
+          }}
+          onStartManual={() => {
+            setManualCourse(true)
+            setCourseCode('')
+          }}
+          onManualCodeChange={(code) => setCourseCode(code)}
+        />
+        <div className="topbar-status" data-testid="ocr-status">
+          <Server size={14} aria-hidden="true" />
+          <span className={`live-dot ${ocr?.status === 'ok' ? 'ok' : 'idle'}`} />
+          <span>{ocrLabel}</span>
+        </div>
       </header>
+
       <main className="workspace">
-        <section className="hero">
-          <div><p className="eyebrow">COURSE KNOWLEDGE WORKSPACE</p><h1>让课程资料，<em>可被问到。</em></h1><p className="hero-copy">上传课程文档，按课程或单份资料检索，用有来源的回答快速定位知识。</p></div>
-          <div className="ocr-panel" data-testid="ocr-status">
-            <div className="status-icon"><Server size={17} /></div>
-            <div><span className="label">OCR 引擎</span><strong>{ocrState === 'loading' ? '检测中…' : ocrState === 'error' ? '无法检测' : ocr?.status === 'ok' ? '可用' : ocr?.status === 'disabled' ? '已关闭' : '不可用'}</strong></div>
-            {ocr?.status === 'ok' && <Check size={16} className="status-ok" />}
-            {ocr?.status === 'unavailable' && <AlertCircle size={16} className="status-warn" />}
-          </div>
-        </section>
-
         <section className="grid-layout">
-          <div className="left-column">
-            <section className="panel upload-panel">
-              <div className="section-head"><div><span className="section-kicker">01 / INGEST</span><h2>添加课程文档</h2></div><CircleHelp size={17} className="muted" /></div>
-              <div className="field"><label htmlFor="course-code">课程代码</label><input id="course-code" value={courseCode} onChange={(e) => onCourseChange(e.target.value)} placeholder="例如 CS-COMP-ORG" /></div>
-              <label className={`dropzone ${file ? 'has-file' : ''}`} htmlFor="file-upload">
-                <input id="file-upload" type="file" accept=".pdf,.pptx,application/pdf,application/vnd.openxmlformats-officedocument.presentationml.presentation" onChange={(e) => { setFile(e.target.files?.[0] ?? null); setUploadState('idle'); setUploadResult(null) }} />
-                <UploadCloud size={24} />
-                <strong>{file ? file.name : '选择或拖入 PDF / PPTX'}</strong>
-                <span>{file ? `${(file.size / 1024 / 1024).toFixed(2)} MB` : '支持课程讲义和演示文稿'}</span>
-              </label>
-              <div className="file-note"><span>PDF 扫描页依赖 OCR 引擎</span><span>PPTX 仅解析文本内容</span></div>
-              <button className="primary-button" onClick={() => void submitUpload()} disabled={!file || !courseCode.trim() || uploadState === 'loading'}><UploadCloud size={16} />{uploadState === 'loading' ? '正在处理…' : '上传并建立索引'}</button>
-              {uploadState === 'success' && uploadResult && <div className="notice success"><Check size={16} /><div><strong>文档已加入课程</strong><span>{uploadMessage} · {uploadResult.pages} 页 · {uploadResult.chunks} 个 chunks · ID {uploadResult.id}</span></div></div>}
-              {uploadState === 'error' && <div className="notice error"><AlertCircle size={16} /><span>{uploadMessage}</span></div>}
-              {ocr?.status === 'unavailable' && <div className="notice warning"><AlertCircle size={16} /><span>OCR 不可用，扫描内容可能无法提取。{ocr.error ? ` ${ocr.error}` : ''}</span></div>}
-              {ocr?.status === 'disabled' && <div className="notice warning"><AlertCircle size={16} /><span>OCR 已关闭，扫描 PDF 可能无法提取文字。</span></div>}
-            </section>
-
-            <section className="panel documents-panel">
-              <div className="section-head"><div><span className="section-kicker">02 / LIBRARY</span><h2>课程文档 <small>{documents.length}</small></h2></div><button className="icon-button" title="刷新文档列表" onClick={() => void loadDocuments()}><RefreshCw size={16} className={listState === 'loading' ? 'spin' : ''} /></button></div>
-              <div className="list-toolbar"><span>当前课程</span><strong>{courseCode || '未填写'}</strong><button onClick={() => void loadDocuments()}><Search size={14} /> 查询</button></div>
-              {listState === 'error' && <div className="inline-error"><AlertCircle size={15} />{listError}</div>}
-              {listState === 'loading' && documents.length === 0 ? <div className="empty-state"><LoaderCircle className="spin" size={21} />加载文档中…</div> : documents.length === 0 ? <div className="empty-state"><FileText size={22} /><span>该课程还没有文档</span><small>上传后，文档会出现在这里</small></div> : <div className="document-list">
-                {documents.map((doc) => <div className={`document-row ${selectedDocument === doc.document_id ? 'selected' : ''}`} key={doc.document_id} onClick={() => setSelectedDocument(selectedDocument === doc.document_id ? '' : doc.document_id)}>
-                  <div className={`file-icon ${doc.file_type.toLowerCase()}`}>{formatType(doc.file_type)}</div><div className="doc-info"><strong title={doc.filename}>{doc.filename}</strong><span>{doc.status} · {doc.page_count} 页 · {doc.chunk_count} chunks</span></div><button className="delete-button" title={`删除 ${doc.filename}`} onClick={(e) => { e.stopPropagation(); void removeDocument(doc) }}><Trash2 size={15} /></button><ChevronDown size={15} className={`row-chevron ${selectedDocument === doc.document_id ? 'open' : ''}`} /></div>)}
-              </div>}
-              {selectedDocument && <div className="selection-note"><Check size={14} />问答将限定在：<strong>{documents.find((doc) => doc.document_id === selectedDocument)?.filename}</strong><button onClick={() => setSelectedDocument('')}><X size={14} /></button></div>}
-            </section>
+          <div className="main-column">
+            <AskPanel
+              question={question}
+              onQuestionChange={setQuestion}
+              topK={topK}
+              onTopKChange={setTopK}
+              courseCode={courseCode}
+              courseName={currentCourse?.name}
+              selectedFilename={selectedDocumentSummary?.filename}
+              queryState={queryState}
+              queryError={queryError}
+              answer={answer}
+              onSubmit={(event) => void submitQuery(event)}
+            />
           </div>
 
-          <section className="panel qa-panel">
-            <div className="section-head"><div><span className="section-kicker">03 / ASK</span><h2>课程问答</h2></div><div className="scope-chip"><MessageSquare size={14} />{selectedDocument ? '单份文档' : '全课程'}</div></div>
-            <form onSubmit={submitQuery}>
-              <label className="question-box"><span>你的问题</span><textarea value={question} onChange={(e) => setQuestion(e.target.value)} placeholder="例如：ADD 指令的微地址序列是什么？" rows={5} /></label>
-              <div className="query-controls"><label>检索数量 <input type="number" min="1" max="20" value={topK} onChange={(e) => setTopK(Math.max(1, Math.min(20, Number(e.target.value) || 1)))} /></label><span className="query-hint">按课程 <strong>{courseCode || '—'}</strong> 检索</span><button className="primary-button" type="submit" disabled={!question.trim() || !courseCode.trim() || queryState === 'loading'}><MessageSquare size={16} />{queryState === 'loading' ? '检索与生成中…' : '开始问答'}</button></div>
-            </form>
-            {queryState === 'error' && <div className="notice error"><AlertCircle size={16} /><div><span>{queryError.message}</span>{queryError.requestId && <small>request_id <code>{queryError.requestId}</code></small>}<small>请确认后端服务状态；429/503 错误可稍后重试。</small></div></div>}
-            {queryState === 'loading' && <div className="answer-loading"><LoaderCircle className="spin" size={20} /><div><strong>正在查找相关内容</strong><span>答案生成完成前，请稍候…</span></div></div>}
-            {answer && queryState === 'success' && <div className="answer-area"><div className="answer-meta"><span>回答</span><span>{answer.model} · {Math.round(answer.latency_ms)} ms</span></div><div className="answer-text">{answer.answer}</div><div className="citation-head"><h3>来源 <small>{answer.citations.length}</small></h3><span>分数为检索相关性，不是概率</span></div><div className="citations">{answer.citations.length === 0 ? <div className="empty-citations">没有返回引用来源。</div> : answer.citations.map((citation, index) => <CitationCard citation={citation} index={index} key={`${citation.document_id}-${citation.page}-${index}`} />)}</div><div className="request-id">request_id <code>{answer.request_id}</code></div></div>}
-            {queryState === 'idle' && !answer && <div className="qa-empty"><MessageSquare size={28} /><strong>问一个课程问题</strong><span>回答会附带文档、页码和检索片段，方便回到原文核对。</span></div>}
-          </section>
+          <aside className="side-column">
+            {coursesState === 'error' && (
+              <StatusNotice tone="warning" title="课程列表加载失败">
+                {coursesError} 可在上方「手动新建课程」里输入已有课程代码继续使用。
+              </StatusNotice>
+            )}
+            <UploadPanel
+              courseCode={courseCode}
+              courseName={currentCourse?.name}
+              file={file}
+              phase={uploadPhase}
+              progress={uploadProgress}
+              detail={uploadDetail}
+              errorMessage={uploadError}
+              errorCode={uploadErrorCode}
+              requestId={uploadRequestId}
+              ocr={ocr}
+              ocrState={ocrState}
+              onFileChange={(next) => {
+                setFile(next)
+                if (!BUSY_PHASES.includes(uploadPhase)) {
+                  setUploadPhase('idle')
+                  setUploadDetail(null)
+                  setUploadProgress(null)
+                  setUploadError('')
+                  setUploadErrorCode(null)
+                }
+              }}
+              onUpload={() => void submitUpload()}
+              onRetry={() => void submitUpload()}
+              onCancelPolling={cancelPolling}
+              onRefreshLists={refreshLists}
+            />
+            <DocumentList
+              documents={documents}
+              courses={courses}
+              courseCode={courseCode}
+              selectedDocument={selectedDocument}
+              listState={listState}
+              listError={listError}
+              onSelect={selectDocument}
+              onDelete={(document) => void removeDocument(document)}
+              onRefresh={() => void loadDocuments(courseRef.current)}
+            />
+          </aside>
         </section>
       </main>
     </div>
   )
-}
-
-function CitationCard({ citation, index }: { citation: import('./api').Citation; index: number }) {
-  const sourceText = citation.text_sources?.join(' · ') || (citation.page_used_ocr || citation.modality === 'ocr' ? 'OCR' : citation.modality || '文本')
-  return <article className="citation-card"><div className="citation-index">{String(index + 1).padStart(2, '0')}</div><div className="citation-content"><div className="citation-title"><strong>{citation.filename || '未命名文档'}</strong><span>{citation.file_type?.toUpperCase() || 'DOC'} · {citation.page != null ? `第 ${citation.page} 页` : '页码未知'}</span></div><p>{citation.snippet || '暂无来源文本'}</p><div className="citation-tags"><span>{sourceText}</span>{citation.block_type && <span>{citation.block_type}</span>}{citation.score != null && <span>score {Number(citation.score).toFixed(3)}</span>}</div></div></article>
 }
