@@ -28,6 +28,7 @@ RUN python -c "import pathlib, tomllib; project = tomllib.loads(pathlib.Path('/a
     && rm /tmp/requirements.txt
 
 COPY --chown=edurage:edurage src/ /app/src/
+COPY --chown=edurage:edurage configs/ /app/configs/
 
 USER edurage
 
