@@ -2,12 +2,17 @@
 
 from __future__ import annotations
 
+import logging
 import re
 from collections.abc import Mapping, Sequence
 from typing import Any, Protocol
 
+from qdrant_client.http import models as qdrant_models
+
 from edurage.core.config import get_settings
-from edurage.rag.keyword_retriever import extract_terms, keyword_score
+from edurage.rag.keyword_retriever import extract_terms, keyword_score, matched_terms
+
+logger = logging.getLogger(__name__)
 
 
 class VectorRetriever(Protocol):
@@ -30,6 +35,92 @@ class KeywordRetriever(Protocol):
         candidates: Sequence[Mapping[str, Any]] | None = None,
         top_k: int | None = None,
     ) -> list[dict[str, Any]]: ...
+
+
+class KeywordCandidateSource(Protocol):
+    def retrieve(
+        self,
+        *,
+        course_code: str | None = None,
+        document_id: str | None = None,
+        limit: int,
+    ) -> list[dict[str, Any]]: ...
+
+
+class QdrantKeywordCandidateSource:
+    """Bounded payload-only candidate source for independent keyword recall."""
+
+    def __init__(self, client: Any, collection_name: str, scan_limit: int = 2000) -> None:
+        self.client = client
+        self.collection_name = collection_name
+        self.scan_limit = scan_limit
+        self.truncated = False
+
+    def retrieve(
+        self,
+        *,
+        course_code: str | None = None,
+        document_id: str | None = None,
+        limit: int | None = None,
+    ) -> list[dict[str, Any]]:
+        scan_limit = min(self.scan_limit, limit or self.scan_limit)
+        self.truncated = False
+        conditions = []
+        if course_code is not None:
+            conditions.append(
+                qdrant_models.FieldCondition(
+                    key="course_code",
+                    match=qdrant_models.MatchValue(value=course_code),
+                )
+            )
+        if document_id is not None:
+            conditions.append(
+                qdrant_models.FieldCondition(
+                    key="document_id",
+                    match=qdrant_models.MatchValue(value=document_id),
+                )
+            )
+        query_filter = qdrant_models.Filter(must=conditions) if conditions else None
+        points: list[Any] = []
+        offset = None
+        while len(points) < scan_limit:
+            batch_size = min(256, scan_limit - len(points))
+            result = self.client.scroll(
+                collection_name=self.collection_name,
+                scroll_filter=query_filter,
+                limit=batch_size,
+                offset=offset,
+                with_payload=True,
+                with_vectors=False,
+            )
+            if isinstance(result, tuple):
+                batch, next_offset = result
+            else:
+                batch = getattr(result, "points", result)
+                next_offset = getattr(result, "next_page_offset", None)
+            points.extend(batch or [])
+            if not batch or next_offset is None:
+                break
+            offset = next_offset
+        if len(points) >= scan_limit and offset is not None:
+            self.truncated = True
+            logger.warning(
+                "keyword candidate scan truncated at limit=%d collection=%s",
+                scan_limit,
+                self.collection_name,
+            )
+        return [
+            {
+                "payload": dict(
+                    getattr(point, "payload", None)
+                    if not isinstance(point, Mapping)
+                    else point.get("payload", {})
+                    or {}
+                ),
+                "score": 0.0,
+            }
+            for point in points[:scan_limit]
+        ]
 
 
 class Reranker(Protocol):
@@ -111,7 +202,17 @@ def fuse_results(
 
 
 class LocalKeywordRetriever:
-    """Score supplied candidates locally; no network or external index required."""
+    """Score vector candidates and an optional independent payload candidate source."""
+
+    def __init__(
+        self,
+        candidate_source: KeywordCandidateSource | None = None,
+        *,
+        scan_limit: int = 2000,
+    ) -> None:
+        self.candidate_source = candidate_source
+        self.scan_limit = scan_limit
+        self.last_scan_truncated = False
 
     def retrieve(
         self,
@@ -123,8 +224,22 @@ class LocalKeywordRetriever:
         top_k: int | None = None,
     ) -> list[dict[str, Any]]:
         terms = extract_terms(question)
+        source_candidates: Sequence[Mapping[str, Any]] = []
+        if self.candidate_source is not None:
+            source_candidates = self.candidate_source.retrieve(
+                course_code=course_code,
+                document_id=document_id,
+                limit=self.scan_limit,
+            )
+            self.last_scan_truncated = bool(
+                getattr(self.candidate_source, "truncated", False)
+            )
+        merged: dict[tuple[Any, Any, Any], tuple[int, Mapping[str, Any]]] = {}
+        for index, original in enumerate([*(candidates or []), *source_candidates]):
+            key = _identity(original)
+            merged.setdefault(key, (index, original))
         scored: list[tuple[int, dict[str, Any]]] = []
-        for index, original in enumerate(candidates or []):
+        for index, original in merged.values():
             payload = _payload(original)
             if course_code is not None and payload.get("course_code") != course_code:
                 continue
@@ -146,16 +261,9 @@ class DeterministicReranker:
         terms = extract_terms(question)
         for hit in hits:
             payload = _payload(hit)
-            text = " ".join(
-                str(payload.get(key, ""))
-                for key in ("text", "snippet", "content")
-            )
-            matched = [term for term in terms if term.casefold() in text.casefold()]
+            matched = matched_terms(terms, payload)
             exact_identifiers = [
-                term
-                for term in terms
-                if re.fullmatch(r"[A-Z][A-Z0-9_-]*", term)
-                and re.search(rf"(?<![A-Za-z0-9_]){re.escape(term)}(?![A-Za-z0-9_])", text)
+                term for term in matched if re.fullmatch(r"[A-Z][A-Z0-9_-]*", term)
             ]
             bonus = 0.025 * len(exact_identifiers)
             if len(matched) > 1:
@@ -222,3 +330,23 @@ class HybridRetriever:
         return self.reranker.rerank(question, hits)[:limit]
 
     __call__ = retrieve
+
+
+def build_hybrid_retriever(vector_retriever: VectorRetriever, settings: Any) -> HybridRetriever:
+    """Assemble hybrid retrieval with a bounded independent Qdrant keyword source."""
+    scan_limit = int(getattr(settings, "keyword_scan_limit", 2000))
+    client = getattr(vector_retriever, "client", None)
+    collection_name = getattr(settings, "qdrant_collection", "edurage_chunks")
+    source = (
+        QdrantKeywordCandidateSource(client, collection_name, scan_limit)
+        if client is not None and hasattr(client, "scroll")
+        else None
+    )
+    keyword = LocalKeywordRetriever(source, scan_limit=scan_limit)
+    return HybridRetriever(
+        vector_retriever,
+        keyword,
+        vector_weight=getattr(settings, "vector_weight", None),
+        keyword_weight=getattr(settings, "keyword_weight", None),
+        candidate_k=getattr(settings, "candidate_k", None),
+    )

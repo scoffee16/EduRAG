@@ -15,6 +15,13 @@ from edurage.ingest.ocr import (
 )
 
 
+class TextSegment(TypedDict):
+    """A contiguous extraction source, without presentation markers."""
+
+    text: str
+    source: str
+
+
 class ParsedPage(TypedDict):
     """Text extracted from one 1-based PDF page."""
 
@@ -24,6 +31,8 @@ class ParsedPage(TypedDict):
     text_sources: NotRequired[list[str]]
     ocr_confidence: NotRequired[float | None]
     ocr_error: NotRequired[str | None]
+    text_segments: NotRequired[list[TextSegment]]
+    page_used_ocr: NotRequired[bool]
 
 
 def parse_pdf(
@@ -57,11 +66,14 @@ def parse_pdf(
             for page_number, page in enumerate(document, start=1):
                 text = page.get_text("text")
                 if not use_ocr:
-                    pages.append({"page": page_number, "text": text})
+                    pages.append(
+                        {"page": page_number, "text": text, "page_used_ocr": False}
+                    )
                     continue
 
                 result: OcrPageResult | None = None
                 ocr_error: str | None = None
+                page_used_ocr = False
                 if should_ocr_page(
                     text,
                     page_image_area_ratio(page),
@@ -74,6 +86,7 @@ def parse_pdf(
                             matrix=pymupdf.Matrix(scale, scale),
                             alpha=False,
                         )
+                        page_used_ocr = True
                         result = ocr_provider.recognize(
                             pixmap.tobytes("png"),
                             page=page_number,
@@ -84,6 +97,11 @@ def parse_pdf(
                         ocr_error = f"{type(exc).__name__}: {exc}"
 
                 merged, sources = _merge_page_text(text, result.text if result else "")
+                segments: list[TextSegment] = []
+                if "text" in sources:
+                    segments.append({"text": text.rstrip(), "source": "text"})
+                if "ocr" in sources:
+                    segments.append({"text": result.text.strip(), "source": "ocr"})
                 pages.append(
                     {
                         "page": page_number,
@@ -92,6 +110,8 @@ def parse_pdf(
                         "text_sources": sources,
                         "ocr_confidence": result.confidence if result else None,
                         "ocr_error": ocr_error,
+                        "text_segments": segments,
+                        "page_used_ocr": page_used_ocr,
                     }
                 )
             return pages

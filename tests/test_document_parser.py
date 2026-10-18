@@ -12,7 +12,7 @@ from edurage.ingest.ocr import OcrPageResult
 def test_document_parser_dispatches_pdf_to_pdf_parser(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[Path] = []
 
-    def fake_parse_pdf(path: Path) -> list[dict[str, object]]:
+    def fake_parse_pdf(path: Path, **kwargs: object) -> list[dict[str, object]]:
         calls.append(path)
         return [{"page": 1, "text": "pdf text"}]
 
@@ -21,7 +21,9 @@ def test_document_parser_dispatches_pdf_to_pdf_parser(monkeypatch: pytest.Monkey
     pages = document_parser.parse_document(Path("demo.pdf"))
 
     assert calls == [Path("demo.pdf")]
-    assert pages == [{"page": 1, "text": "pdf text", "source_type": "pdf"}]
+    assert pages == [
+        {"page": 1, "text": "pdf text", "source_type": "pdf", "page_used_ocr": False}
+    ]
 
 
 def test_document_parser_dispatches_pptx_to_pptx_parser(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -36,7 +38,9 @@ def test_document_parser_dispatches_pptx_to_pptx_parser(monkeypatch: pytest.Monk
     pages = document_parser.parse_document(Path("demo.pptx"))
 
     assert calls == [Path("demo.pptx")]
-    assert pages == [{"page": 2, "text": "slide text", "source_type": "pptx"}]
+    assert pages == [
+        {"page": 2, "text": "slide text", "source_type": "pptx", "page_used_ocr": False}
+    ]
 
 
 def test_document_parser_rejects_unsupported_extensions() -> None:

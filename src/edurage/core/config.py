@@ -40,6 +40,9 @@ class Settings(BaseSettings):
     chunk_size: int = 500
     chunk_overlap: int = 80
     upload_max_mb: int = 20
+    api_rate_limit_per_minute: int = 60
+    api_max_concurrency: int = 2
+    keyword_scan_limit: int = 2000
     top_k: int = 5
     vector_weight: float = 0.6
     keyword_weight: float = 0.4

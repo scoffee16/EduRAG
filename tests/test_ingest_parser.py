@@ -21,8 +21,8 @@ def test_parse_pdf_returns_page_text_with_one_based_page_numbers(tmp_path: Path)
     pdf_path = _write_pdf(tmp_path / "pages.pdf", ["first page", "second page"])
 
     assert parse_pdf(pdf_path) == [
-        {"page": 1, "text": "first page\n"},
-        {"page": 2, "text": "second page\n"},
+        {"page": 1, "text": "first page\n", "page_used_ocr": False},
+        {"page": 2, "text": "second page\n", "page_used_ocr": False},
     ]
 
 
