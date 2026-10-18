@@ -19,6 +19,25 @@ interface AskPanelProps {
   onSubmit: (event: FormEvent<HTMLFormElement>) => void
 }
 
+/** 知识来源的中文标签与样式后缀（course_materials / web_search / model_knowledge）。 */
+const SOURCE_LABELS: Record<string, string> = {
+  course_materials: '课程资料',
+  web_search: '联网搜索',
+  model_knowledge: '模型通用知识',
+}
+
+const SOURCE_CLASSES: Record<string, string> = {
+  course_materials: 'source-course',
+  web_search: 'source-web',
+  model_knowledge: 'source-model',
+}
+
+/** 列表里的外部网页摘要截断，避免长文本撑破卡片。 */
+function truncateSnippet(text: string | null | undefined) {
+  const value = (text ?? '').trim()
+  return value.length > 160 ? `${value.slice(0, 160)}…` : value
+}
+
 /** 主问答面板：提问、检索范围、Markdown/LaTeX 答案与引用来源。 */
 export default function AskPanel({
   question,
@@ -34,13 +53,23 @@ export default function AskPanel({
   onSubmit,
 }: AskPanelProps) {
   const loading = queryState === 'loading'
+  // 旧后端不返回 knowledge_sources 时，有引用即视为使用了课程资料
+  const knowledgeSources =
+    answer?.knowledge_sources ??
+    (answer && answer.citations.length > 0 ? ['course_materials'] : [])
+  const hasNonCourseSource = knowledgeSources.some(
+    (source) => source !== 'course_materials',
+  )
+  const webResults = answer?.web_results ?? []
   return (
     <section className="panel qa-panel">
       <div className="panel-head qa-head">
         <div>
           <span className="section-kicker">问答 / ASK</span>
           <h2>课程问答</h2>
-          <p className="panel-hint">基于课程文档检索，回答附带来源页码，方便回到原文核对。</p>
+          <p className="panel-hint">
+            优先基于课程文档检索；资料不足时会补充联网搜索或模型通用知识，并标注来源。
+          </p>
         </div>
         <span className="scope-chip">
           <MessageSquare size={14} aria-hidden="true" />
@@ -125,7 +154,51 @@ export default function AskPanel({
               {answer.model} · {Math.round(answer.latency_ms)} ms
             </span>
           </div>
+          {knowledgeSources.length > 0 && (
+            <div className="source-badges" data-testid="knowledge-sources">
+              <span className="source-label">知识来源</span>
+              {knowledgeSources.map((source) => (
+                <span
+                  className={`source-badge ${SOURCE_CLASSES[source] ?? 'source-unknown'}`}
+                  key={source}
+                >
+                  {SOURCE_LABELS[source] ?? source}
+                </span>
+              ))}
+            </div>
+          )}
+          {hasNonCourseSource && (
+            <StatusNotice
+              tone="warning"
+              title="包含课程资料之外的内容"
+              className="source-warning"
+            >
+              本回答包含课程资料之外的内容，请谨慎参考并核实来源。
+            </StatusNotice>
+          )}
           <AnswerMarkdown content={answer.answer} />
+          {webResults.length > 0 && (
+            <div className="web-sources" data-testid="web-results">
+              <div className="web-sources-head">
+                <h3>
+                  联网搜索来源 <small>{webResults.length}</small>
+                </h3>
+                <span>外部网页内容，仅供参考</span>
+              </div>
+              <ul className="web-source-list">
+                {webResults.map((item, index) => (
+                  <li className="web-source-item" key={`${item.url}-${index}`}>
+                    <a href={item.url} target="_blank" rel="noreferrer noopener">
+                      {item.title || item.url}
+                    </a>
+                    {item.snippet && (
+                      <p className="web-source-snippet">{truncateSnippet(item.snippet)}</p>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
           <div className="citation-head">
             <h3>
               来源 <small>{answer.citations.length}</small>
@@ -134,7 +207,9 @@ export default function AskPanel({
           </div>
           <div className="citations">
             {answer.citations.length === 0 ? (
-              <div className="empty-citations">没有返回引用来源。</div>
+              <div className="empty-citations">
+                {hasNonCourseSource ? '本回答未使用课程资料引用。' : '没有返回引用来源。'}
+              </div>
             ) : (
               answer.citations.map((citation, index) => (
                 <CitationCard
@@ -155,7 +230,7 @@ export default function AskPanel({
         <div className="qa-empty">
           <MessageSquare size={26} aria-hidden="true" />
           <strong>问一个课程问题</strong>
-          <span>回答会附带文档、页码和检索片段，方便回到原文核对。</span>
+          <span>回答会标注课程资料、联网搜索或模型通用知识来源，方便核对。</span>
           <span className="qa-empty-hint">
             <ArrowRight size={13} aria-hidden="true" />
             先在右上角选择课程，再输入问题

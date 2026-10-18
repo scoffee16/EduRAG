@@ -10,8 +10,22 @@ import type { CourseSummary, DocumentDetail, DocumentSummary } from './api'
 /* -------------------------------------------------------------------------- */
 
 const COURSES: CourseSummary[] = [
-  { code: 'CS-COMP-ORG', name: '计算机组成原理', document_count: 2, chunk_count: 24 },
-  { code: 'CS-OS', name: '操作系统', document_count: 0, chunk_count: 0 },
+  {
+    code: 'CS-COMP-ORG',
+    name: '计算机组成原理',
+    document_count: 2,
+    chunk_count: 24,
+    origin: 'config',
+    deletable: false,
+  },
+  {
+    code: 'CS-OS',
+    name: '操作系统',
+    document_count: 0,
+    chunk_count: 0,
+    origin: 'config',
+    deletable: false,
+  },
 ]
 
 function makeDocuments(): DocumentSummary[] {
@@ -62,6 +76,8 @@ const DEFAULT_ANSWER = {
   model: 'mock-model',
   latency_ms: 21,
   request_id: 'req-answer-1',
+  knowledge_sources: ['course_materials'],
+  web_results: [],
 }
 
 /* -------------------------------------------------------------------------- */
@@ -87,6 +103,12 @@ interface QueryBody {
   top_k: number
 }
 
+interface CreateCourseBody {
+  code: string
+  name: string
+  description?: string
+}
+
 interface RecordedRequest {
   url: string
   method: string
@@ -95,6 +117,8 @@ interface RecordedRequest {
 
 interface MockHandlers {
   courses?: () => Response | Promise<Response>
+  createCourse?: (body: CreateCourseBody) => Response | Promise<Response>
+  deleteCourse?: (code: string) => Response | Promise<Response>
   documents?: (courseCode: string) => Response | Promise<Response>
   upload?: (file: File | null) => Response | Promise<Response>
   documentDetail?: (documentId: string) => Response | Promise<Response>
@@ -129,6 +153,28 @@ function installFetch(handlers: MockHandlers = {}): MockServer {
     }
 
     if (path.includes('/courses')) {
+      if (method === 'POST') {
+        const createBody =
+          typeof body === 'string' ? (JSON.parse(body) as CreateCourseBody) : ({} as CreateCourseBody)
+        return (
+          handlers.createCourse?.(createBody) ??
+          json(
+            {
+              code: createBody.code,
+              name: createBody.name,
+              document_count: 0,
+              chunk_count: 0,
+              origin: 'manual',
+              deletable: true,
+            },
+            { status: 201 },
+          )
+        )
+      }
+      if (method === 'DELETE') {
+        const code = decodeURIComponent(path.split('/courses/')[1] ?? '')
+        return handlers.deleteCourse?.(code) ?? new Response(null, { status: 204 })
+      }
       return handlers.courses?.() ?? json(COURSES)
     }
 
@@ -262,7 +308,7 @@ describe('EduRAG 前端工作流', () => {
     expect(server.count('/api/v1/documents?course_code=CS-OS')).toBe(1)
   })
 
-  it('支持手动新建课程代码，并按输入的代码加载文档', async () => {
+  it('手动新建课程：双输入框填写代码与名称，创建前不会用输入值加载文档', async () => {
     const user = userEvent.setup()
     const server = installFetch()
     render(<App />)
@@ -270,21 +316,31 @@ describe('EduRAG 前端工作流', () => {
     await screen.findByText('讲义.pdf')
     await user.selectOptions(screen.getByLabelText('课程'), '__manual__')
 
-    const manualInput = await screen.findByLabelText('新课程代码')
-    await user.type(manualInput, 'cs-sys')
-    expect(manualInput).toHaveValue('CS-SYS')
+    const codeInput = await screen.findByLabelText('课程代码')
+    const nameInput = screen.getByLabelText('课程名称')
+    expect(screen.getByRole('button', { name: '创建课程' })).toBeDisabled()
 
-    await waitFor(
-      () => expect(server.count('/api/v1/documents?course_code=CS-SYS')).toBe(1),
-      { timeout: 2000 },
-    )
+    await user.type(codeInput, 'cs-sys')
+    expect(codeInput).toHaveValue('CS-SYS')
+    await user.type(nameInput, '计算机系统')
+    expect(screen.getByRole('button', { name: '创建课程' })).toBeEnabled()
+
+    // 创建成功前：不按输入值请求文档，上传/问答都不可用
+    expect(server.count('/api/v1/documents?course_code=CS-SYS')).toBe(0)
+    expect(screen.getByText('请先创建课程')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '开始问答' })).toBeDisabled()
+
+    await user.click(screen.getByRole('button', { name: '取消' }))
+    expect(screen.getByLabelText('课程')).toHaveValue('CS-COMP-ORG')
   })
 
   it('课程列表为空时进入手动新建课程模式', async () => {
     installFetch({ courses: () => json([]) })
     render(<App />)
 
-    expect(await screen.findByLabelText('新课程代码')).toBeInTheDocument()
+    expect(await screen.findByLabelText('课程代码')).toBeInTheDocument()
+    expect(screen.getByLabelText('课程名称')).toBeInTheDocument()
+    expect(screen.getByText('请先创建课程')).toBeInTheDocument()
     expect(screen.getByText('该课程还没有文档')).toBeInTheDocument()
   })
 
@@ -570,6 +626,164 @@ describe('EduRAG 前端工作流', () => {
     const warnings = await screen.findAllByText(/OCR 不可用/)
     expect(warnings.length).toBeGreaterThan(0)
     expect(screen.getByTestId('ocr-status')).toHaveTextContent('OCR 不可用')
+  })
+
+  it('创建课程：POST 课程代码与名称，成功后选中新课程并加载其文档', async () => {
+    const user = userEvent.setup()
+    let courses = [...COURSES]
+    const server = installFetch({
+      courses: () => json(courses),
+      createCourse: (body) => {
+        const created: CourseSummary = {
+          code: body.code,
+          name: body.name,
+          document_count: 0,
+          chunk_count: 0,
+          origin: 'manual',
+          deletable: true,
+        }
+        courses = [...courses, created]
+        return json(created, { status: 201 })
+      },
+    })
+    render(<App />)
+
+    await screen.findByText('讲义.pdf')
+    await user.selectOptions(screen.getByLabelText('课程'), '__manual__')
+    await user.type(screen.getByLabelText('课程代码'), 'cs-ai')
+    await user.type(screen.getByLabelText('课程名称'), '人工智能导论')
+    await user.click(screen.getByRole('button', { name: '创建课程' }))
+
+    expect(await screen.findByText('课程已创建')).toBeInTheDocument()
+    const post = server.matching('/api/v1/courses').find((request) => request.method === 'POST')
+    expect(JSON.parse(String(post?.body))).toEqual({ code: 'CS-AI', name: '人工智能导论' })
+    await waitFor(() => expect(screen.getByLabelText('课程')).toHaveValue('CS-AI'))
+    await waitFor(() => expect(server.count('/api/v1/documents?course_code=CS-AI')).toBe(1))
+  })
+
+  it('创建课程返回 409 course_exists 时自动切换到已有课程', async () => {
+    const user = userEvent.setup()
+    installFetch({
+      courses: () =>
+        json([
+          ...COURSES,
+          {
+            code: 'CS-SYS',
+            name: '计算机系统',
+            document_count: 0,
+            chunk_count: 0,
+            origin: 'manual',
+            deletable: true,
+          },
+        ]),
+      createCourse: () =>
+        json(
+          {
+            error: { code: 'course_exists', message: '课程已存在' },
+            request_id: 'req-create-409',
+          },
+          { status: 409 },
+        ),
+    })
+    render(<App />)
+
+    await screen.findByText('讲义.pdf')
+    await user.selectOptions(screen.getByLabelText('课程'), '__manual__')
+    await user.type(screen.getByLabelText('课程代码'), 'cs-sys')
+    await user.type(screen.getByLabelText('课程名称'), '计算机系统')
+    await user.click(screen.getByRole('button', { name: '创建课程' }))
+
+    expect(await screen.findByText('课程已存在，已切换')).toBeInTheDocument()
+    await waitFor(() => expect(screen.getByLabelText('课程')).toHaveValue('CS-SYS'))
+  })
+
+  it('删除可删除课程：确认提示级联删除文档，调用 force DELETE 并刷新列表', async () => {
+    const user = userEvent.setup()
+    let courses: CourseSummary[] = [
+      { ...COURSES[0], origin: 'manual', deletable: true, document_count: 3 },
+      COURSES[1],
+    ]
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true)
+    const server = installFetch({
+      courses: () => json(courses),
+      deleteCourse: (code) => {
+        courses = courses.filter((course) => course.code !== code)
+        return new Response(null, { status: 204 })
+      },
+    })
+    render(<App />)
+
+    await screen.findByText('讲义.pdf')
+    await user.click(await screen.findByRole('button', { name: '删除课程' }))
+
+    expect(confirm).toHaveBeenCalledWith(expect.stringContaining('3 篇文档'))
+    await waitFor(() =>
+      expect(
+        server
+          .matching('/api/v1/courses/CS-COMP-ORG')
+          .some((request) => request.method === 'DELETE'),
+      ).toBe(true),
+    )
+    const deleteRequest = server
+      .matching('/api/v1/courses/CS-COMP-ORG')
+      .find((request) => request.method === 'DELETE')
+    expect(deleteRequest?.url).toContain('force=true')
+
+    expect(await screen.findByText('课程已删除')).toBeInTheDocument()
+    await waitFor(() => expect(screen.getByLabelText('课程')).toHaveValue('CS-OS'))
+    expect(screen.queryByText('讲义.pdf')).not.toBeInTheDocument()
+  })
+
+  it('配置同步的课程不可删除：不展示删除课程按钮', async () => {
+    const user = userEvent.setup()
+    installFetch()
+    render(<App />)
+
+    await screen.findByText('讲义.pdf')
+    expect(screen.queryByRole('button', { name: '删除课程' })).not.toBeInTheDocument()
+
+    await user.selectOptions(screen.getByLabelText('课程'), 'CS-OS')
+    expect(await screen.findByText('该课程还没有文档')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '删除课程' })).not.toBeInTheDocument()
+  })
+
+  it('问答展示知识来源 badge、非课程资料警示与联网搜索来源', async () => {
+    const user = userEvent.setup()
+    installFetch({
+      query: () =>
+        json({
+          ...DEFAULT_ANSWER,
+          citations: [],
+          knowledge_sources: ['course_materials', 'web_search'],
+          web_results: [
+            {
+              title: '指令周期 - 维基百科',
+              url: 'https://example.com/instruction-cycle',
+              snippet: '指令周期包含取指、译码、执行等阶段。',
+            },
+          ],
+        }),
+    })
+    render(<App />)
+
+    await screen.findByText('讲义.pdf')
+    await user.type(screen.getByPlaceholderText(/ADD 指令/), '指令周期是什么？')
+    await user.click(screen.getByRole('button', { name: '开始问答' }))
+
+    expect(await screen.findByText('知识来源')).toBeInTheDocument()
+    expect(screen.getByText('课程资料')).toBeInTheDocument()
+    expect(screen.getByText('联网搜索')).toBeInTheDocument()
+    expect(screen.getByText('包含课程资料之外的内容')).toBeInTheDocument()
+    expect(
+      screen.getByText('本回答包含课程资料之外的内容，请谨慎参考并核实来源。'),
+    ).toBeInTheDocument()
+    expect(screen.getByText('本回答未使用课程资料引用。')).toBeInTheDocument()
+
+    const link = screen.getByRole('link', { name: '指令周期 - 维基百科' })
+    expect(link).toHaveAttribute('href', 'https://example.com/instruction-cycle')
+    expect(link).toHaveAttribute('target', '_blank')
+    expect(link.getAttribute('rel')).toContain('noopener')
+    expect(screen.getByText(/取指、译码、执行/)).toBeInTheDocument()
   })
 })
 

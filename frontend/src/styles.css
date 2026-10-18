@@ -239,6 +239,11 @@ pre {
   flex: 1;
 }
 
+/* 课程创建/删除结果提示 */
+.course-notice {
+  margin-bottom: var(--space-4);
+}
+
 .grid-layout {
   display: grid;
   grid-template-columns: minmax(0, 1fr) var(--sidebar-width);
@@ -480,34 +485,100 @@ pre {
   pointer-events: none;
 }
 
-.manual-course {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
+/* 手动新建课程：课程代码 + 课程名称双输入框 + 创建/取消 */
+.manual-course-form {
+  position: relative;
+  display: flex;
+  align-items: flex-end;
+  gap: var(--space-2);
   min-width: 0;
 }
 
-.manual-course span {
+.manual-field {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
   font-size: var(--font-xs);
   color: var(--gray-500);
-  flex: none;
 }
 
-.manual-course input {
-  width: 168px;
-  height: 40px;
-  padding: 0 12px;
+.manual-field input {
+  width: 152px;
+  height: 36px;
+  padding: 0 10px;
   border: 1px solid var(--gray-300);
   border-radius: var(--radius-sm);
   background: #fff;
-  font-size: var(--font-md);
+  font-size: var(--font-sm);
+  color: var(--gray-900);
+}
+
+#manual-course-code {
   text-transform: uppercase;
 }
 
-.manual-course input:focus-visible {
+.manual-field input::placeholder {
+  color: var(--gray-400);
+}
+
+.manual-field input:hover {
+  border-color: var(--gray-400);
+}
+
+.manual-field input:focus-visible {
   outline: none;
   border-color: var(--color-primary);
   box-shadow: 0 0 0 3px var(--color-primary-ring);
+}
+
+.manual-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+}
+
+.manual-actions .primary-button {
+  min-height: 36px;
+  padding: 0 14px;
+  font-size: var(--font-sm);
+}
+
+.manual-actions .text-button {
+  min-height: 36px;
+}
+
+/* 创建失败提示：绝对定位浮在 topbar 下方，避免撑高顶栏 */
+.manual-error {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  max-width: 340px;
+  margin: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--color-error-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-error-soft);
+  color: var(--color-error);
+  font-size: var(--font-xs);
+  line-height: 1.4;
+  box-shadow: var(--shadow-sm);
+  z-index: 30;
+}
+
+.course-delete-button {
+  color: var(--gray-500);
+}
+
+.course-delete-button:hover:not(:disabled) {
+  color: var(--color-error);
+  border-color: var(--color-error-border);
+  background: var(--color-error-soft);
+}
+
+.course-delete-button:disabled {
+  cursor: progress;
 }
 
 /* ------------------------------------------------------------------ 问答 */
@@ -972,6 +1043,125 @@ pre {
   text-align: center;
   font-size: var(--font-sm);
   color: var(--gray-500);
+}
+
+/* 知识来源 badge：课程资料 / 联网搜索 / 模型通用知识 */
+.source-badges {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin: 0 0 12px;
+}
+
+.source-label {
+  font-size: var(--font-xs);
+  color: var(--gray-500);
+}
+
+.source-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 9px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  font-size: var(--font-xs);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.source-course {
+  border-color: var(--color-success-border);
+  background: var(--color-success-soft);
+  color: var(--color-success);
+}
+
+.source-web {
+  border-color: var(--color-info-border);
+  background: var(--color-info-soft);
+  color: var(--color-info);
+}
+
+.source-model {
+  border-color: var(--color-warning-border);
+  background: var(--color-warning-soft);
+  color: var(--color-warning);
+}
+
+.source-unknown {
+  border-color: var(--gray-300);
+  background: var(--gray-100);
+  color: var(--gray-600);
+}
+
+.source-warning {
+  margin: 0 0 12px;
+}
+
+/* 联网搜索来源列表 */
+.web-sources {
+  margin-top: 20px;
+}
+
+.web-sources-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-2);
+  margin-bottom: 10px;
+}
+
+.web-sources-head h3 {
+  font-size: var(--font-lg);
+  font-weight: 650;
+}
+
+.web-sources-head h3 small {
+  margin-left: 4px;
+  font-size: var(--font-xs);
+  font-weight: 500;
+  color: var(--gray-500);
+}
+
+.web-sources-head > span {
+  font-size: var(--font-xs);
+  color: var(--gray-500);
+}
+
+.web-source-list {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.web-source-item {
+  padding: 10px 12px;
+  border: 1px solid var(--gray-200);
+  border-radius: var(--radius-sm);
+  background: var(--gray-50);
+}
+
+.web-source-item a {
+  font-size: var(--font-sm);
+  font-weight: 600;
+  color: var(--color-info);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  overflow-wrap: anywhere;
+}
+
+.web-source-item a:hover {
+  color: var(--color-info-strong, #0d3f99);
+}
+
+.web-source-snippet {
+  margin: 4px 0 0;
+  font-size: var(--font-sm);
+  line-height: 1.6;
+  color: var(--gray-700);
+  overflow-wrap: anywhere;
 }
 
 .request-id {
@@ -1480,13 +1670,8 @@ pre {
   .document-list {
     max-height: 420px;
   }
-}
 
-@media (max-width: 768px) {
-  .workspace {
-    padding: var(--space-4) var(--space-4) var(--space-8);
-  }
-
+  /* 手动新建课程时顶栏内容更宽，允许换行避免横向溢出 */
   .topbar {
     height: auto;
     min-height: var(--topbar-height);
@@ -1497,10 +1682,6 @@ pre {
 
   .brand {
     order: 1;
-  }
-
-  .brand-text span {
-    display: none;
   }
 
   .topbar-status {
@@ -1526,13 +1707,38 @@ pre {
     max-width: none;
   }
 
-  .manual-course {
+  .manual-course-form {
+    width: 100%;
+    max-width: 620px;
+    flex-wrap: wrap;
+  }
+
+  .manual-field {
+    flex: 1 1 150px;
+  }
+
+  .manual-field input {
     width: 100%;
   }
 
-  .manual-course input {
-    flex: 1;
-    width: auto;
+  .manual-actions {
+    margin-left: auto;
+  }
+
+  .manual-error {
+    position: static;
+    width: 100%;
+    max-width: none;
+  }
+}
+
+@media (max-width: 768px) {
+  .workspace {
+    padding: var(--space-4) var(--space-4) var(--space-8);
+  }
+
+  .brand-text span {
+    display: none;
   }
 
   .panel {
@@ -1582,6 +1788,15 @@ pre {
 @media (pointer: coarse) {
   .text-button {
     min-height: 40px;
+  }
+
+  .manual-actions .primary-button,
+  .manual-actions .text-button {
+    min-height: 40px;
+  }
+
+  .manual-field input {
+    height: 40px;
   }
 
   .document-main {

@@ -5,9 +5,20 @@ export interface CourseSummary {
   code: string
   name: string
   description?: string | null
+  /** 课程来源：`config`（配置文件同步）或 `manual`（页面新建）。 */
+  origin: string
+  /** 是否允许删除；config 同步来的课程不可删除。 */
+  deletable: boolean
   document_count: number
   chunk_count: number
   updated_at?: string | null
+}
+
+/** 新建课程请求体，对应 `POST /api/v1/courses`。 */
+export interface CreateCourseBody {
+  code: string
+  name: string
+  description?: string
 }
 
 export interface DocumentSummary {
@@ -69,12 +80,26 @@ export interface Citation {
   text_sources?: string[] | null
 }
 
+/** 联网搜索来源，对应问答响应中的 `web_results`。 */
+export interface WebSearchResult {
+  title: string
+  url: string
+  snippet?: string | null
+}
+
+/** 知识来源取值：课程资料 / 联网搜索 / 模型通用知识。 */
+export type KnowledgeSource = 'course_materials' | 'web_search' | 'model_knowledge' | string
+
 export interface QueryResponse {
   answer: string
   citations: Citation[]
   model: string
   latency_ms: number
   request_id: string
+  /** 回答实际使用的知识来源，按优先级排列。 */
+  knowledge_sources?: KnowledgeSource[]
+  /** 联网搜索命中的网页结果（可能为空数组）。 */
+  web_results?: WebSearchResult[]
 }
 
 export interface OcrHealth {
@@ -120,6 +145,38 @@ function withRequestId<T extends object>(body: T, response: Response) {
 
 export async function getCourses(signal?: AbortSignal) {
   return parseResponse<CourseSummary[]>(await fetch('/api/v1/courses', { signal }))
+}
+
+/** 新建课程；409 时后端返回 `course_exists`。 */
+export async function createCourse(body: CreateCourseBody, signal?: AbortSignal) {
+  return parseResponse<CourseSummary>(
+    await fetch('/api/v1/courses', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      signal,
+    }),
+  )
+}
+
+/**
+ * 删除课程；`force=true` 时级联删除课程文档、索引与文件。
+ * 成功返回 204 无 body，因此不走 parseResponse（空 body 解析会抛错）。
+ */
+export async function deleteCourse(code: string, opts: { force?: boolean } = {}) {
+  const query = opts.force ? '?force=true' : ''
+  const response = await fetch(`/api/v1/courses/${encodeURIComponent(code)}${query}`, {
+    method: 'DELETE',
+  })
+  if (response.ok) return
+  const body = await response.json().catch(() => ({}))
+  const error = body?.error
+  throw new ApiError(
+    error?.message ?? body?.detail ?? `请求失败（HTTP ${response.status}）`,
+    response.status,
+    body?.request_id,
+    error?.code,
+  )
 }
 
 export async function getDocuments(courseCode: string, signal?: AbortSignal) {

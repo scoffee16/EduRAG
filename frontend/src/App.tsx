@@ -3,6 +3,8 @@ import { FileText, Server } from 'lucide-react'
 import {
   ApiError,
   askQuestion,
+  createCourse,
+  deleteCourse,
   deleteDocument,
   getCourses,
   getDocument,
@@ -20,7 +22,7 @@ import { fileExtension } from './format'
 import AskPanel from './components/AskPanel'
 import CourseSelect from './components/CourseSelect'
 import DocumentList from './components/DocumentList'
-import StatusNotice from './components/StatusNotice'
+import StatusNotice, { type NoticeTone } from './components/StatusNotice'
 import UploadPanel, { type UploadPhase } from './components/UploadPanel'
 
 const DEFAULT_POLL_INTERVAL_MS = 1500
@@ -49,6 +51,13 @@ interface UploadJob {
   started_at: number
 }
 
+/** 课程创建/删除操作的结果提示（成功或失败）。 */
+interface CourseNotice {
+  tone: NoticeTone
+  title: string
+  message: string
+}
+
 const BUSY_PHASES: UploadPhase[] = ['uploading', 'processing']
 
 /**
@@ -67,6 +76,13 @@ export default function App({
   const [coursesError, setCoursesError] = useState('')
   const [manualCourse, setManualCourse] = useState(false)
   const [courseCode, setCourseCode] = useState('')
+  // 手动新建课程：双输入框 + 创建中/错误提示；创建成功前不把输入值当作 courseCode
+  const [manualCode, setManualCode] = useState('')
+  const [manualName, setManualName] = useState('')
+  const [creatingCourse, setCreatingCourse] = useState(false)
+  const [createCourseError, setCreateCourseError] = useState('')
+  const [deletingCourse, setDeletingCourse] = useState(false)
+  const [courseNotice, setCourseNotice] = useState<CourseNotice | null>(null)
 
   const [documents, setDocuments] = useState<DocumentSummary[]>([])
   const [listState, setListState] = useState<'idle' | 'loading' | 'error'>('idle')
@@ -99,7 +115,7 @@ export default function App({
   courseRef.current = courseCode
   const uploadBusy = BUSY_PHASES.includes(uploadPhase)
 
-  const loadCourses = useCallback(async () => {
+  const loadCourses = useCallback(async (): Promise<CourseSummary[]> => {
     setCoursesState('loading')
     setCoursesError('')
     try {
@@ -111,10 +127,12 @@ export default function App({
         const current = courseRef.current
         return !(current && list.some((course) => course.code === current))
       })
+      return list
     } catch (error) {
       setCoursesState('error')
       setCoursesError(errorText(error))
       setManualCourse(true)
+      return []
     }
   }, [])
 
@@ -174,24 +192,15 @@ export default function App({
     else setManualCourse(true)
   }, [coursesState, courses])
 
-  // 切换课程：立即重载文档列表，并清空选中文档与上一次回答
+  // 切换课程：立即重载文档列表，并清空选中文档与上一次回答。
+  // 手动新建模式下 courseCode 为空，创建成功前不会用输入值请求文档。
   useEffect(() => {
     setSelectedDocument('')
     setAnswer(null)
     setQueryState('idle')
     setQueryError({ message: '' })
-    if (!courseCode.trim()) {
-      void loadDocuments('')
-      return
-    }
-    if (!manualCourse) {
-      void loadDocuments(courseCode)
-      return
-    }
-    // 手动输入课程代码时防抖，避免每输入一个字符都请求一次
-    const timer = window.setTimeout(() => void loadDocuments(courseCode), 400)
-    return () => window.clearTimeout(timer)
-  }, [courseCode, manualCourse, loadDocuments])
+    void loadDocuments(courseCode)
+  }, [courseCode, loadDocuments])
 
   // 上传成功后轮询进度（1.5s 一次），indexed 刷新课程+文档，failed/超时给出可操作提示
   useEffect(() => {
@@ -307,6 +316,120 @@ export default function App({
     void loadDocuments(courseRef.current)
   }
 
+  /** 进入手动新建课程：清空旧输入，创建成功前 courseCode 保持为空。 */
+  const startManualCourse = () => {
+    setManualCourse(true)
+    setCourseCode('')
+    setManualCode('')
+    setManualName('')
+    setCreateCourseError('')
+    setCourseNotice(null)
+  }
+
+  /** 取消手动新建，回到下拉选择（优先恢复第一门课程）。 */
+  const cancelManualCourse = () => {
+    setManualCourse(false)
+    setManualCode('')
+    setManualName('')
+    setCreateCourseError('')
+    setCourseCode((current) => current || courses[0]?.code || '')
+  }
+
+  const selectCourse = (code: string) => {
+    setManualCourse(false)
+    setManualCode('')
+    setManualName('')
+    setCreateCourseError('')
+    setCourseCode(code)
+  }
+
+  /** 创建课程：成功后刷新列表并选中；409 course_exists 时切换到已有课程。 */
+  const submitCreateCourse = async () => {
+    const code = manualCode.trim()
+    const name = manualName.trim()
+    if (!code || !name || creatingCourse) return
+    setCreatingCourse(true)
+    setCreateCourseError('')
+    setCourseNotice(null)
+    try {
+      const created = await createCourse({ code, name })
+      const list = await loadCourses()
+      const selected = list.find((course) => course.code === created.code) ?? created
+      setManualCourse(false)
+      setManualCode('')
+      setManualName('')
+      setCourseCode(selected.code)
+      setCourseNotice({
+        tone: 'success',
+        title: '课程已创建',
+        message: `课程「${selected.name}（${selected.code}）」已创建，可上传文档并开始问答。`,
+      })
+    } catch (error) {
+      if (error instanceof ApiError && error.code === 'course_exists') {
+        const list = await loadCourses()
+        const existing = list.find((course) => course.code === code)
+        if (existing) {
+          setManualCourse(false)
+          setManualCode('')
+          setManualName('')
+          setCourseCode(existing.code)
+          setCourseNotice({
+            tone: 'info',
+            title: '课程已存在，已切换',
+            message: `已选中已有课程「${existing.name}（${existing.code}）」。`,
+          })
+        } else {
+          setCreateCourseError(errorText(error))
+        }
+      } else {
+        setCreateCourseError(errorText(error))
+      }
+    } finally {
+      setCreatingCourse(false)
+    }
+  }
+
+  /** 删除当前课程（force 级联删除文档/索引/文件），成功后选中剩余第一门课程。 */
+  const removeCourse = async () => {
+    const course = courses.find((item) => item.code === courseCode)
+    if (!course || course.deletable !== true || deletingCourse) return
+    const label = `${course.name}（${course.code}）`
+    const prompt =
+      course.document_count > 0
+        ? `删除课程「${label}」将同时删除 ${course.document_count} 篇文档及其索引与文件，此操作不可撤销。确定删除？`
+        : `确定删除课程「${label}」吗？此操作不可撤销。`
+    if (!window.confirm(prompt)) return
+    setDeletingCourse(true)
+    setCourseNotice(null)
+    try {
+      await deleteCourse(course.code, { force: true })
+      setSelectedDocument('')
+      setAnswer(null)
+      setQueryState('idle')
+      setQueryError({ message: '' })
+      setDocuments([])
+      const list = await loadCourses()
+      const next = list[0] ?? null
+      setCourseCode(next?.code ?? '')
+      setManualCourse(false)
+      setCourseNotice({
+        tone: 'success',
+        title: '课程已删除',
+        message: `课程「${label}」及其文档、索引与文件已删除。`,
+      })
+    } catch (error) {
+      const detail = errorText(error)
+      const code = error instanceof ApiError && error.code ? `（${error.code}）` : ''
+      setCourseNotice({
+        tone: 'error',
+        title: '删除课程失败',
+        message: `${detail}${code}`,
+      })
+    } finally {
+      setDeletingCourse(false)
+    }
+  }
+
   const submitQuery = async (event?: FormEvent<HTMLFormElement>) => {
     event?.preventDefault()
     const code = courseCode.trim()
@@ -392,15 +515,18 @@ export default function App({
           value={courseCode}
           manual={manualCourse}
           coursesState={coursesState}
-          onSelectCourse={(code) => {
-            setManualCourse(false)
-            setCourseCode(code)
-          }}
-          onStartManual={() => {
-            setManualCourse(true)
-            setCourseCode('')
-          }}
-          onManualCodeChange={(code) => setCourseCode(code)}
+          manualCode={manualCode}
+          manualName={manualName}
+          creating={creatingCourse}
+          createError={createCourseError}
+          deleting={deletingCourse}
+          onSelectCourse={selectCourse}
+          onStartManual={startManualCourse}
+          onManualCodeChange={setManualCode}
+          onManualNameChange={setManualName}
+          onCreate={() => void submitCreateCourse()}
+          onCancelManual={cancelManualCourse}
+          onDeleteCourse={() => void removeCourse()}
         />
         <div className="topbar-status" data-testid="ocr-status">
           <Server size={14} aria-hidden="true" />
@@ -410,6 +536,20 @@ export default function App({
       </header>
 
       <main className="workspace">
+        {courseNotice && (
+          <StatusNotice
+            tone={courseNotice.tone}
+            title={courseNotice.title}
+            className="course-notice"
+          >
+            {courseNotice.message}
+          </StatusNotice>
+        )}
+        {manualCourse && !courseCode && (
+          <StatusNotice tone="info" title="请先创建课程">
+            填写课程代码与课程名称并点击「创建课程」后，才能上传文档或开始问答。
+          </StatusNotice>
+        )}
         <section className="grid-layout">
           <div className="main-column">
             <AskPanel
@@ -430,7 +570,7 @@ export default function App({
           <aside className="side-column">
             {coursesState === 'error' && (
               <StatusNotice tone="warning" title="课程列表加载失败">
-                {coursesError} 可在上方「手动新建课程」里输入已有课程代码继续使用。
+                {coursesError} 可在上方「手动新建课程」里输入课程代码与名称后创建或切换课程。
               </StatusNotice>
             )}
             <UploadPanel
