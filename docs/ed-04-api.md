@@ -190,6 +190,64 @@ Markdown block quote that states the knowledge source, for example:
 are only populated for the web-search fallback. The frontend shows a badge for
 every source and warns when an answer contains non-course material.
 
+## Query history
+
+Every successful `POST /api/v1/query` response is persisted server-side so the
+UI can show recent Q&A records after a reload. History is best-effort: a
+storage failure is logged as a warning and never turns the query into an error
+response.
+
+`GET /api/v1/history` returns the most recent saved records, newest first.
+
+| Parameter | Type | Default | Description |
+| --- | --- | --- | --- |
+| `limit` | integer | `20` | Number of records to return, between 1 and 50. |
+| `course_code` | string | none | Optional filter; normalized with `strip().upper()` before matching. |
+
+```json
+[
+  {
+    "history_id": "0c1f7b7e-0f6a-4c9b-9a7e-4f5b2d8c1a33",
+    "course_code": "CS-COMP-ORG",
+    "course_name": "示例课程 · 计算机组成原理",
+    "question": "ADD 指令的微地址序列是什么？",
+    "answer": "……Markdown/LaTeX 回答正文……",
+    "document_scope": [
+      {
+        "document_id": "8f14e45f-ceea-467f-b0b6-1d2f5a0b8e21",
+        "filename": "第3章-微程序控制器.pdf"
+      }
+    ],
+    "citations": [
+      {
+        "document_id": "8f14e45f-ceea-467f-b0b6-1d2f5a0b8e21",
+        "filename": "第3章-微程序控制器.pdf",
+        "page": 12,
+        "snippet": "……命中的文档片段（最多 200 字符）……",
+        "score": 0.81
+      }
+    ],
+    "knowledge_sources": ["course_materials"],
+    "web_results": [],
+    "model": "deepseek-chat",
+    "latency_ms": 1523.4,
+    "request_id": "6f0d0f4e-6f3a-4c4c-9d1e-4c2f2c8b7a11",
+    "created_at": "2026-10-18T15:00:00+00:00"
+  }
+]
+```
+
+- `document_scope` is a snapshot taken when the query ran: `[]` means the
+  whole-course scope, otherwise it lists the selected documents in request
+  order. Filenames fall back to `""` when a document has since been deleted.
+- `citations` carry the same fields as a live query response, including the
+  `snippet` of the hit document chunk, so history entries can be expanded
+  without querying other endpoints.
+- `course_name` is a snapshot too; deleted courses keep their last known name.
+- `created_at` is ISO 8601 with a timezone; an empty history returns `[]`.
+- History is not filtered by client identity, has no retention pruning yet, and
+  is limited only by the `limit` query parameter.
+
 ## Errors
 
 Business and framework errors use:

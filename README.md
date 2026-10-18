@@ -821,3 +821,45 @@ curl.exe -X POST http://127.0.0.1:8000/api/v1/query `
 - 旧 `document_id` 单文档字段行为不变；`document_ids=[A,A," "]` 去重去空白后 200；不存在的 document_id 不回退为全课程资料（无引用、来源不含 `course_materials`）。
 - 负向校验：空数组 / 缺少 `course_code` / 51 个 id 均 422 `invalid_request`。
 - 级联删除临时课程 204，文档详情 404 `not_found`，课程列表清理完毕。
+
+## ED-06 历史问答记录
+
+ED-06 在实时回答下方新增「历史问答」区域，展示最近问答记录，默认折叠、点击展开：
+
+- **持久化**：每次成功的 `POST /api/v1/query` 都会在返回前把问答记录写入 PostgreSQL 新表 `query_history`（启动时随 `create_all` 自动建表，无需手工迁移）。持久化是 best-effort：写库失败只记录 warning，不影响问答响应。
+- **记录内容**：课程代码与课程名（快照）、问题、回答（Markdown/LaTeX）、知识来源、命中引用（含文档片段 `snippet`、页码与分数）、限定文档快照（`document_scope`，空数组表示全课程）、联网结果、模型、耗时、request id 与时间。
+- **查询接口**：`GET /api/v1/history?limit=20[&course_code=CS-COMP-ORG]` 返回最近记录（`created_at` 倒序，`limit` 1..50，默认 20）。完整字段说明见 [docs/ed-04-api.md](docs/ed-04-api.md#query-history)。
+- **前端交互**：历史面板位于实时回答下方；每条默认折叠，收起行显示时间、课程名（缺失回退代码）、问题摘要、知识来源徽章与范围徽章（「全课程」或「限定 N 篇文档」）；点击展开后显示课程、限定文档文件名、完整问题、答案、命中片段与联网结果链接。空历史显示「暂无历史问答，提问后会显示在这里」。
+- **刷新时机**：页面挂载时加载历史，每次问答成功后自动刷新；加载失败不打断问答主流程。
+
+### ED-06 API 示例
+
+```powershell
+# 最近 20 条问答记录
+curl.exe http://127.0.0.1:8000/api/v1/history
+
+# 只看某门课程的最近 5 条
+curl.exe "http://127.0.0.1:8000/api/v1/history?course_code=CS-COMP-ORG&limit=5"
+```
+
+### ED-06 验收结果
+
+| 检查 | 结果 |
+| --- | --- |
+| 后端静态检查 | `python -m ruff check .` All checks passed |
+| 后端测试 | **316 passed**（297 基线 + 19 新增；19.56s） |
+| 前端测试 | **32 passed**（26 基线 + 6 新增；9.02s） |
+| 前端构建 | 通过（3.32s；JS gzip 191.96 kB、CSS gzip 14.30 kB） |
+| 容器健康 | api/postgres/qdrant/minio 均 healthy，`/health` 冻结契约未变 |
+| 真实容器 E2E | `.tmp/e2e/run_e2e_ed06.py` **33/33 PASS** |
+
+真实容器 E2E 覆盖：
+
+- 启动时 `create_all` 自动创建 `query_history` 表（无需手工迁移），课程 YAML 同步保持 `unchanged=1`。
+- 全课程提问后，最新历史记录的问题、回答与实时响应一致，`request_id` 一致，`course_name` 为「示例课程 · 计算机组成原理」快照，`document_scope=[]`，`knowledge_sources` 持久化，`created_at` 为带时区 ISO8601，字段顺序固定为 13 项。
+- 限定单篇文档提问后，`document_scope` 精确等于 `[{document_id, filename}]`，引用只来自所选文档。
+- `course_code` 过滤只返回该课程记录；不存在的课程返回 `[]`；`limit=0/51` 返回 422；默认条数 ≤ 20。
+- 历史记录数随成功问答次数增长；删除文档后历史 `document_scope` 的 `filename` 快照仍保留（快照语义，不随文档删除而丢失）。
+- 删除文档与课程不影响历史读取；持久化失败（best-effort）不会改变问答响应。
+
+> 说明：单元测试中 `tests/test_query_api.py` 与离线 e2e 均以 `FakeQueryHistoryRepository` 覆盖 `get_query_history_repository`，避免测试连接真实 PostgreSQL 拖慢套件（全量从约 46s 回到约 20s）。
