@@ -69,6 +69,8 @@ upload with a new `course_code`.
     "code": "CS-COMP-ORG",
     "name": "计算机组成原理",
     "description": "微程序控制器、模型机、CPU设计",
+    "origin": "config",
+    "deletable": false,
     "document_count": 3,
     "chunk_count": 142,
     "updated_at": "2026-10-18T13:40:02Z"
@@ -78,7 +80,93 @@ upload with a new `course_code`.
 
 `document_count` counts documents in the course and `chunk_count` counts their
 chunks. `description` falls back to the course-pack configuration when the
-dedicated column is empty. Results are ordered by `code`.
+dedicated column is empty. `origin` is `config` for courses synchronized from
+`configs/course_packs/*.yaml` and `manual` for courses created through the API
+or by uploading a document with a new `course_code`; `deletable` is `false`
+exactly for `config` courses. Results are ordered by `code`.
+
+### Create a course
+
+`POST /api/v1/courses` creates a manual course. Both the code and the display
+name are required and independent fields; leading/trailing whitespace is
+stripped and `code` is normalized to uppercase.
+
+```json
+{"code": "cs-os-01", "name": "操作系统实验", "description": "进程、内存与文件系统实验"}
+```
+
+The response is `201 Created` with a single course summary (same shape as the
+list item, `origin: "manual"`, `deletable: true`, zero document/chunk counts):
+
+```json
+{
+  "code": "CS-OS-01",
+  "name": "操作系统实验",
+  "description": "进程、内存与文件系统实验",
+  "origin": "manual",
+  "deletable": true,
+  "document_count": 0,
+  "chunk_count": 0,
+  "updated_at": "2026-10-18T14:02:11Z"
+}
+```
+
+Creating a course whose code already exists returns `409 course_exists`;
+invalid empty/oversized fields return `422` (standard validation envelope).
+
+### Delete a course
+
+`DELETE /api/v1/courses/{code}` deletes a manual course. `force=false`
+(default) refuses to delete a course that still contains documents; pass
+`force=true` to cascade-delete every document (Qdrant vectors, MinIO objects,
+PostgreSQL rows and chunks) before removing the course row. A successful delete
+returns `204 No Content`.
+
+- `404 not_found` — unknown course code.
+- `409 course_config_managed` — the course is generated from
+  `configs/course_packs/*.yaml`; edit the configuration file instead.
+- `409 course_not_empty` — the course still has documents and `force` is not
+  `true`.
+- `500 delete_failed` — one of the underlying document stores failed during the
+  cascade; the course row is kept so the operation can be retried.
+
+## Query
+
+`POST /api/v1/query` answers are layered by knowledge source. By default the
+answer is grounded in retrieved course chunks and carries page citations
+(`knowledge_sources: ["course_materials"]`). When a course-material chunk is
+found but the answer also contains a clearly labeled supplemental section, the
+model marks it and `model_knowledge` is appended to `knowledge_sources`.
+
+When no course chunk matches, the service falls back to a public web search
+(Bing HTML results). If results are available the answer is produced from those
+results and `knowledge_sources` is `["web_search"]`, with the returned pages in
+`web_results`. If the web search fails or returns nothing, the model answers
+from general knowledge and `knowledge_sources` is `["model_knowledge"]`. In the
+fallback cases `citations` is empty and the answer begins with a deterministic
+Markdown block quote that states the knowledge source, for example:
+
+```markdown
+> 知识来源：公开网络搜索结果（非课程资料）。课程资料中未检索到相关片段，以下内容仅供参考。
+
+……回答正文……
+```
+
+```json
+{
+  "answer": "> 知识来源：模型通用知识（非课程资料）。……\n\n……回答正文……",
+  "citations": [],
+  "knowledge_sources": ["model_knowledge"],
+  "web_results": [],
+  "model": "deepseek-chat",
+  "latency_ms": 1523.4,
+  "request_id": "6f0d0f4e-6f3a-4b4c-9d1e-4c2f2c8b7a11"
+}
+```
+
+`web_results` items are `{"title": "...", "url": "...", "snippet": "..."}` and
+are only populated for the web-search fallback. The frontend shows a badge for
+every source and warns when an answer contains non-course material.
 
 ## Errors
 
@@ -93,7 +181,8 @@ Business and framework errors use:
 
 Known codes include `invalid_request`, `unsupported_file_type`,
 `mime_mismatch`, `invalid_upload`, `upload_too_large`, `upload_disabled`,
-`ingest_failed`, `not_found`, `upstream_unavailable`, `rate_limited`,
+`ingest_failed`, `not_found`, `course_exists`, `course_config_managed`,
+`course_not_empty`, `delete_failed`, `upstream_unavailable`, `rate_limited`,
 `server_busy`, and `internal_error`. Responses retain their HTTP status.
 Sensitive configuration, credentials, request bodies, stack traces, and
 document contents are not returned. The health response body remains the
