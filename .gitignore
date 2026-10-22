@@ -22,6 +22,13 @@ env/
 # Application data
 data/
 
+# Local database dumps and scratch files
+*.db
+*.sqlite
+*.sqlite3
+*.bak
+*.log
+
 # Model caches
 .cache/
 models/
@@ -36,9 +43,15 @@ huggingface/
 .pytest-tmp/
 .coverage
 .coverage.*
+coverage/
 htmlcov/
 
-# IDE project files
+# IDE and editor files
 .idea/
+.vscode/
 *.iml
 
+# OS-generated files
+.DS_Store
+Thumbs.db
+desktop.ini

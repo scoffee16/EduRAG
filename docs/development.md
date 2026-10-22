@@ -207,7 +207,7 @@ Use `python -m pytest -q` and `python -m ruff check .` consistently. Bare `pytes
 
 ### pytest-asyncio configuration
 
-`pytest-asyncio` remains in the development dependencies, but `asyncio_mode` is intentionally not configured. ED-01 async tests must opt in explicitly with `@pytest.mark.asyncio`; do not assume automatic async test collection.
+`pyproject.toml` sets `asyncio_mode = "auto"` for `pytest-asyncio`, so async tests do not need an explicit `@pytest.mark.asyncio` marker. The current test suite has no async tests yet; keep automatic mode so future async tests are collected without extra boilerplate.
 
 ### Live API smoke test
 

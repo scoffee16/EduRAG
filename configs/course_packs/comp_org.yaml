@@ -1,3 +1,7 @@
+# Example course pack. The parsers / knowledge_graph / tools / retrieval_config
+# sections are reserved metadata for future work and are NOT executed by the
+# current runtime. Ingestion currently supports pdf / pptx / docx plus optional
+# selective OCR.
 course_pack:
   name: "示例课程 · 计算机组成原理"
   code: "CS-COMP-ORG"

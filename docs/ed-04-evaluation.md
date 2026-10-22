@@ -46,10 +46,10 @@ bounded independent payload candidate source:
 
 | Run | Recall@5 | MRR | Citation page accuracy | Fragment rate | Median chunk length |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| Baseline, vector candidates only | 0.5000 | 0.4167 | 0.1250 | 0.5000 | 19 |
-| After, independent keyword candidates | 1.0000 | 0.8333 | 0.2500 | 0.5000 | 19 |
+| Baseline, vector candidates only | 0.6250 | 0.5313 | 0.1250 | 0.3750 | 23.5 |
+| After, independent keyword candidates | 1.0000 | 0.9063 | 0.2000 | 0.3750 | 23.5 |
 
-These values were produced on October 15, 2026 with the command above. The
+These values were produced on October 22, 2026 with the command above. The
 result is deterministic and does not require Docker, Qdrant, OCR, embeddings,
 or an external API.
 

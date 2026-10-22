@@ -7,6 +7,7 @@ name = "edurage"
 version = "0.0.1"
 description = "Educational retrieval-augmented generation service."
 readme = "README.md"
+license = { text = "MIT" }
 requires-python = ">=3.11"
 dependencies = [
     "fastapi",
@@ -42,6 +43,11 @@ dev = [
     "pre-commit",
     "respx",
 ]
+
+[project.urls]
+Homepage = "https://github.com/scoffee16/EduRAG"
+Repository = "https://github.com/scoffee16/EduRAG"
+Issues = "https://github.com/scoffee16/EduRAG/issues"
 
 [tool.setuptools.packages.find]
 where = ["src"]

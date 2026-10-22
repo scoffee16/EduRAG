@@ -1,0 +1,4 @@
+# Keep line endings stable across platforms.
+# Windows batch scripts must stay CRLF for cmd.exe; POSIX shell scripts must stay LF.
+*.bat text eol=crlf
+*.sh text eol=lf
