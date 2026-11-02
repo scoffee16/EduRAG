@@ -130,15 +130,19 @@ supplied. A page is eligible when all of the following hold:
   area (computed by `page_image_area_ratio`, the same helper used by OCR);
 - the stripped page text is at most `vlm_figure_max_text_chars`
   characters, so text-heavy pages keep their text-only representation;
-- at least one image rectangle survives clipping to the page bounds.
+- at least one image rectangle survives clipping to the page bounds;
+- a surviving rectangle covers at least half the area of the page's
+  largest image rectangle (`MIN_RELATIVE_FIGURE_AREA`), so the repeated
+  template banners, logos, and icons that slide decks stamp on every page
+  are never rendered or described.
 
 At most `vlm_max_images_per_page` image rectangles are rendered, ordered by
 area (largest first), de-duplicated by image content hash, and clipped to
 the page. Each rectangle is rendered to PNG with the long side capped at
 1600 px (render scale at most 2x), so vision payloads stay bounded. Text
 extraction and OCR behavior are unchanged; figures are additive page
-records. Long text pages and pages with only small logos or icons are
-skipped by the two thresholds above.
+records. Long text pages and pages with only small decorations are skipped
+by the thresholds above.
 
 ### Prompt And Output
 
@@ -195,7 +199,9 @@ ingestion always succeeds. Known limitations:
 - a real OpenAI-compatible VLM endpoint and API key are required; there is
   no local fallback model;
 - figure descriptions are model-generated and may be imperfect; the
-  prompt asks the model to mark uncertain content as `无法识别`.
+  prompt asks the model to mark uncertain content as `无法识别`;
+- descriptions are capped at 400 tokens (`MAX_DESCRIPTION_TOKENS`), so a
+  dense figure may have its tail truncated even when the head is indexed.
 
 ### Offline Evaluation
 
@@ -219,6 +225,38 @@ hits, and figure page accuracy counts questions whose highest-ranked figure
 hit cites the correct page. The baseline cannot answer the five figure
 questions from caption text alone, while the VLM path retrieves the
 described figure chunks on the correct pages.
+
+### Live Validation
+
+The VLM path was smoke-tested against a real 75-page lecture deck
+(`算法设计与分析_第3章_动态规划1-发布版.pdf`) with `qwen3-vl-plus` through
+an OpenAI-compatible endpoint:
+
+- 91 chunks were indexed, 5 of them figure chunks;
+- only page 7 (multi-stage decision diagram) and page 54 (four matrix-chain
+  tables) were eligible, and the repeated template banners were filtered
+  out before rendering;
+- a question about the edge weights of the page-7 diagram retrieved the
+  figure chunk at rank 1 and the answer cited page 7.
+
+To reproduce from the host against the Docker services, point the storage
+URLs at the published ports and enable the vision endpoint:
+
+```bash
+export EDURAGE_QDRANT_URL=http://127.0.0.1:6333
+export EDURAGE_POSTGRES_DSN=postgresql+psycopg://edurage:edurage@127.0.0.1:5432/edurage
+export EDURAGE_MINIO_ENDPOINT=127.0.0.1:9000
+export EDURAGE_VLM_ENABLED=true
+export EDURAGE_VLM_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
+export EDURAGE_VLM_MODEL=qwen3-vl-plus
+export EDURAGE_VLM_API_KEY=your-vision-api-key
+export EDURAGE_VLM_CACHE_DIR=.cache/edurage/vlm
+```
+
+then ingest with `IngestIndexer.prepare_document` + `IngestIndexer.ingest_pdf`
+(or upload through the API once `vlm_enabled` is set in the service
+environment). Figure chunks land in Qdrant with `block_type="figure"`,
+`modality="image"`, and `text_sources=["vlm"]`.
 
 ## Filename Contract
 

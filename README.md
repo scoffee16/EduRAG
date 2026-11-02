@@ -108,7 +108,7 @@ python -m scripts.evaluate_answers --limit 20         # 生成层：faithfulness
 python -m scripts.evaluate_figures --mode both        # VLM 图表：figure_recall@5 / figure 页准确率
 ```
 
-真实课件评测当前结果（40 题，page-level gold）：纯向量 Recall@5 `0.975`、MRR `0.724`；混合检索 Recall@5 `0.750`、MRR `0.652`——**这是一个如实的负结果**：OCR 课件页上关键词/RRF/确定性重排没有超过纯向量，原因与后续改进方向记录在 [docs/ed-04-evaluation.md](docs/ed-04-evaluation.md)。生成层（20 题、189 条论断）：faithfulness `0.853`、引用覆盖率 `0.720`。VLM 图表离线 fixture（10 页）：`figure_recall@5` 0 → 1.0，图表页准确率 0 → 1.0。
+真实课件评测当前结果（40 题，page-level gold）：纯向量 Recall@5 `0.975`、MRR `0.724`；混合检索 Recall@5 `0.750`、MRR `0.652`——**这是一个如实的负结果**：OCR 课件页上关键词/RRF/确定性重排没有超过纯向量，原因与后续改进方向记录在 [docs/ed-04-evaluation.md](docs/ed-04-evaluation.md)。生成层（20 题、189 条论断）：faithfulness `0.853`、引用覆盖率 `0.720`。VLM 图表离线 fixture（10 页）：`figure_recall@5` 0 → 1.0，图表页准确率 0 → 1.0；另用 `qwen3-vl-plus` 在 75 页真实课件上验证：75 页 → 91 个 chunk，其中 5 个 figure 块，第 7 页流程图问题 top-1 命中并引用 page 7（见 [docs/ed-04-ingest.md](docs/ed-04-ingest.md)）。
 
 性能方面，真实问答链路的检索 P50 约 179 ms / P95 约 230 ms，首字约 1.0 s、端到端约 1.9 s，其中 LLM 生成占约 85%——详见 [docs/ed-05-performance.md](docs/ed-05-performance.md)，可用 `python -m scripts.benchmark_retrieval` 复现。
 
@@ -120,7 +120,7 @@ CI 包含 Python 3.11 / 3.12 / 3.13 后端测试、前端构建与测试、`dock
 - **依赖第三方云 API**：默认使用 DeepSeek + DashScope，课件片段与问题会发送到对应服务，不支持离线推理；VLM 图表理解还需要额外的视觉模型 Key。
 - **异步导入非持久队列**：使用进程内 `BackgroundTasks`，重启可能中断任务；限流与并发控制仅对单进程生效，建议只跑一个 API worker。
 - **引用粒度有限**：到页 / 幻灯片 / 章节；OCR 仅处理扫描版 PDF 页面；前端未容器化。
-- **VLM 图表理解有限**：仅对图片占比高、文本少的 PDF 页面触发，覆盖位图区域，PPTX/DOCX 图表尚未支持；figure 块作为原子描述可超过 `chunk_size`（受模型输出长度约束）。
+- **VLM 图表理解有限**：仅对图片占比高、文本少的 PDF 页面触发，覆盖位图区域；每页重复的模板小图/装饰条会在渲染前被过滤；描述受模型 400 token 输出上限约束（密集图可能被截断）；PPTX/DOCX 图表尚未支持；figure 块作为原子描述可超过 `chunk_size`。
 - **真实语料上混合检索尚未证明优于纯向量**：见上方评测与 [docs/ed-04-evaluation.md](docs/ed-04-evaluation.md)；调参与重排策略仍在迭代。
 - **单轮问答**：没有会话、多轮上下文与长期记忆子系统；`query_history` 只用于展示与评测，不参与检索或生成。
 - **规划项未实现**：知识图谱、Agent 工具链、Cross-Encoder 重排、多轮会话与长期记忆等。

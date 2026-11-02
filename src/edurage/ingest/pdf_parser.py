@@ -22,6 +22,11 @@ from edurage.ingest.ocr import (
 
 logger = logging.getLogger(__name__)
 
+# Slide decks often repeat a small raster (banner, logo, decoration) on every page.
+# Describing those images would add noise chunks, so an image region must be at
+# least half the area of the page's largest image region to count as a figure.
+MIN_RELATIVE_FIGURE_AREA = 0.5
+
 
 class TextSegment(TypedDict):
     """A contiguous extraction source, without presentation markers."""
@@ -198,7 +203,7 @@ def _page_figures(
         return []
     figures: list[FigureSegment] = []
     seen_hashes: set[str] = set()
-    for rect in _image_rects_by_area(page):
+    for rect in _figure_rects_by_area(page):
         if len(figures) >= max_images:
             break
         try:
@@ -257,6 +262,27 @@ def _image_rects_by_area(page: pymupdf.Page) -> list[pymupdf.Rect]:
             placed.append((clipped.width * clipped.height, clipped))
     placed.sort(key=lambda item: (-item[0], item[1].y0, item[1].x0))
     return [rect for _, rect in placed]
+
+
+def _figure_rects_by_area(page: pymupdf.Page) -> list[pymupdf.Rect]:
+    """Return plausible figure regions, skipping small repeated decorations.
+
+    Regions are already sorted largest first; anything below
+    ``MIN_RELATIVE_FIGURE_AREA`` of the largest region is treated as a template
+    or icon rather than a content figure.
+    """
+
+    rects = _image_rects_by_area(page)
+    if not rects:
+        return rects
+    largest = rects[0].width * rects[0].height
+    if largest <= 0:
+        return rects
+    return [
+        rect
+        for rect in rects
+        if (rect.width * rect.height) / largest >= MIN_RELATIVE_FIGURE_AREA
+    ]
 
 
 def _merge_page_text(original: str, ocr_text: str) -> tuple[str, list[str]]:

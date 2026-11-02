@@ -69,6 +69,34 @@ def _two_image_pdf(path: Path) -> Path:
     return path
 
 
+def _decorative_image_pdf(path: Path) -> Path:
+    """Create a one-page PDF with one dominant figure and one tiny decoration."""
+
+    document = pymupdf.open()
+    try:
+        page = document.new_page(width=595, height=842)
+        for rect, color in (
+            (pymupdf.Rect(40, 40, 555, 650), (0.1, 0.3, 0.8)),
+            (pymupdf.Rect(40, 700, 110, 770), (0.9, 0.9, 0.2)),
+        ):
+            scratch = pymupdf.open()
+            try:
+                scratch_page = scratch.new_page(width=rect.width, height=rect.height)
+                scratch_page.draw_rect(
+                    pymupdf.Rect(1, 1, rect.width - 1, rect.height - 1),
+                    color=color,
+                    fill=color,
+                )
+                png = scratch_page.get_pixmap(matrix=pymupdf.Matrix(2, 2)).tobytes("png")
+            finally:
+                scratch.close()
+            page.insert_image(rect, stream=png, keep_proportion=False)
+        document.save(path)
+    finally:
+        document.close()
+    return path
+
+
 def test_fixture_pdf_layout_without_figures(tmp_path: Path) -> None:
     pdf_path = _figure_pdf(tmp_path)
 
@@ -144,6 +172,15 @@ def test_figure_cap_limits_images_per_page(tmp_path: Path) -> None:
 
     assert len(pages[0]["figures"]) == 2
     assert len(capped_pages[0]["figures"]) == 1
+
+
+def test_small_repeated_decorations_are_not_described(tmp_path: Path) -> None:
+    pdf_path = _decorative_image_pdf(tmp_path / "decorative.pdf")
+
+    pages = parse_pdf(pdf_path, figure_describer=FakeFigureDescriber())
+
+    assert len(pages[0]["figures"]) == 1
+    assert pages[0]["figures"][0]["text"] == FIGURE_DESCRIPTIONS[1]
 
 
 def test_figure_failures_are_tolerated(tmp_path: Path) -> None:
