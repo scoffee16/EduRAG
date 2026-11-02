@@ -182,6 +182,19 @@ Markdown block quote that states the knowledge source, for example:
   "web_results": [],
   "model": "deepseek-chat",
   "latency_ms": 1523.4,
+  "timings": {
+    "retrieve_ms": 178.6,
+    "query_embedding_ms": 111.5,
+    "vector_search_ms": 8.4,
+    "keyword_scan_ms": 55.4,
+    "keyword_search_ms": 55.4,
+    "fusion_ms": 0.1,
+    "rerank_ms": 3.0,
+    "context_chars": 1461,
+    "dropped_hits": 0,
+    "llm_ms": 1310.2,
+    "total_ms": 1523.4
+  },
   "request_id": "6f0d0f4e-6f3a-4b4c-9d1e-4c2f2c8b7a11"
 }
 ```
@@ -189,6 +202,78 @@ Markdown block quote that states the knowledge source, for example:
 `web_results` items are `{"title": "...", "url": "...", "snippet": "..."}` and
 are only populated for the web-search fallback. The frontend shows a badge for
 every source and warns when an answer contains non-course material.
+
+### Timings
+
+`latency_ms` keeps its meaning (end-to-end wall time), and the optional
+`timings` object breaks it down by stage. All fields are optional and are
+absent when their stage did not run (for example `web_search_ms` is `null`
+for a normal course-material answer). See
+[ed-05-performance.md](ed-05-performance.md) for measured values and how each
+stage is instrumented.
+
+| Field | Description |
+| --- | --- |
+| `retrieve_ms` | Whole retrieval call, including query embedding, both recall paths, fusion and rerank. |
+| `query_embedding_ms` / `vector_search_ms` | Query embedding API call and Qdrant vector search. |
+| `keyword_scan_ms` / `keyword_search_ms` | Qdrant payload scan for independent keyword candidates and the local keyword scoring pass. |
+| `fusion_ms` / `rerank_ms` | Weighted RRF fusion and deterministic rerank. |
+| `llm_ms` | Answer generation phase (non-streaming: the whole call). |
+| `first_token_ms` | First generated token as seen by the client, measured from request start (streaming only). |
+| `total_ms` | End-to-end time; equals `latency_ms`. |
+| `web_search_ms` | Web-search fallback, when it runs. |
+| `context_chars` / `dropped_hits` | Evidence characters injected into the prompt and hits removed by the evidence budget. |
+
+The same breakdown is persisted per query in `query_history.timings`.
+
+## Streaming answers
+
+`POST /api/v1/query/stream` accepts the same body as `POST /api/v1/query`
+(including `document_ids` scope and `top_k`) and answers with
+`text/event-stream` instead of a JSON body. The response is a sequence of
+server-sent events, so the client can render tokens while the model is still
+generating.
+
+Each event is a standard SSE frame (`event: <name>\ndata: <json>\n\n`):
+
+| Event | Payload | When |
+| --- | --- | --- |
+| `meta` | `{request_id, model, knowledge_sources, citations, web_results, timings}` | Once, as soon as retrieval finished; citations and the evidence budget are already known. |
+| `token` | `{text}` | Repeated, once per generated delta, in order. |
+| `done` | `{answer, latency_ms, first_token_ms, knowledge_sources, timings}` | Once, at the end; `answer` is the full text and `timings` is the merged breakdown. |
+| `error` | `{error: {code, message}, request_id}` | Mid-stream failure only; the stream ends after this frame. |
+
+Example:
+
+```text
+event: meta
+data: {"request_id":"9ac1d075-...","model":"deepseek-chat","knowledge_sources":["course_materials"],"citations":[...],"web_results":[],"timings":{"retrieve_ms":283.4,"query_embedding_ms":194.8,"vector_search_ms":7.4,"keyword_search_ms":77.5,"fusion_ms":0.15,"rerank_ms":3.1,"context_chars":1461,"dropped_hits":0}}
+
+event: token
+data: {"text":"根据检索片段，"}
+
+event: done
+data: {"answer":"……完整回答……","latency_ms":1926.0,"first_token_ms":1025.4,"knowledge_sources":["course_materials"],"timings":{"retrieve_ms":283.4,"llm_ms":1641.8,"first_token_ms":1025.4,"total_ms":1926.0}}
+```
+
+Behaviour notes:
+
+- Errors detected **before** streaming starts (invalid request, upstream
+  unavailable, rate limited, server busy) still use the normal JSON error
+  envelope with the corresponding HTTP status; clients must check
+  `response.ok` first.
+- A failure **after** the stream started (generation/upstream error) ends with
+  an `error` event and HTTP `200`; partial tokens already received remain
+  valid text but must not be treated as a complete answer.
+- `first_token_ms` includes retrieval time on purpose: it is the delay the
+  user actually sees. `llm_ms` covers only the generation phase.
+- The streamed query is persisted to `query_history` once the `done` event is
+  produced; a stream that ends with `error` is not persisted.
+- The request holds the in-process concurrency permit for the whole stream,
+  not only until response headers are written.
+- The frontend consumes this endpoint by default, falls back to
+  `POST /api/v1/query` when the body stream is unavailable, and shows
+  "检索 / 首字 / 总计" timing chips from `meta` and `done`.
 
 ## Query history
 
@@ -231,6 +316,18 @@ response.
     "web_results": [],
     "model": "deepseek-chat",
     "latency_ms": 1523.4,
+    "timings": {
+      "retrieve_ms": 178.6,
+      "query_embedding_ms": 111.5,
+      "vector_search_ms": 8.4,
+      "keyword_search_ms": 55.4,
+      "fusion_ms": 0.1,
+      "rerank_ms": 3.0,
+      "context_chars": 1461,
+      "dropped_hits": 0,
+      "llm_ms": 1310.2,
+      "total_ms": 1523.4
+    },
     "request_id": "6f0d0f4e-6f3a-4c4c-9d1e-4c2f2c8b7a11",
     "created_at": "2026-10-18T15:00:00+00:00"
   }
@@ -243,6 +340,9 @@ response.
 - `citations` carry the same fields as a live query response, including the
   `snippet` of the hit document chunk, so history entries can be expanded
   without querying other endpoints.
+- `timings` is the per-stage latency snapshot of the original query (the same
+  object the response returned); it is stored for evaluation and regression
+  work, and is `null` for records written before the field existed.
 - `course_name` is a snapshot too; deleted courses keep their last known name.
 - `created_at` is ISO 8601 with a timezone; an empty history returns `[]`.
 - History is not filtered by client identity, has no retention pruning yet, and
@@ -284,7 +384,9 @@ connection strings are excluded.
 capacity receive `503` and `Retry-After`. `EDURAGE_KEYWORD_SCAN_LIMIT`
 defaults to `2000` Qdrant payload candidates. Rate and concurrency controls
 are intentionally single-process: with multiple workers each worker keeps
-its own counters and semaphore. No Redis is required.
+its own counters and semaphore. No Redis is required. A streaming query holds
+one concurrency slot until its response body is fully consumed, not only until
+the headers are written.
 
 ## OCR health
 

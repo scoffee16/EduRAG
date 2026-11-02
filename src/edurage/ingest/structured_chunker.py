@@ -111,7 +111,37 @@ def structured_chunk_pages(
                         "ocr_error": _ocr_error(page_data.get("ocr_error")),
                     }
                 )
+        for figure in _page_figures(page_data):
+            figure_text = str(figure.get("text", "")).strip()
+            if not figure_text:
+                continue
+            chunks.append(
+                {
+                    "text": figure_text,
+                    "page": page,
+                    "chunk_index": len(chunks),
+                    "modality": "image",
+                    "block_type": "figure",
+                    "section": section if section is not None else "",
+                    "source_type": str(
+                        page_data.get("source_type", page_data.get("source", "text"))
+                    ),
+                    "text_sources": ["vlm"],
+                    "page_used_ocr": used_ocr,
+                    "ocr_confidence": _ocr_confidence(page_data.get("ocr_confidence")),
+                    "ocr_error": _ocr_error(page_data.get("ocr_error")),
+                }
+            )
     return chunks
+
+
+def _page_figures(page_data: Mapping[str, Any]) -> list[Mapping[str, Any]]:
+    """Return well-formed VLM figure records attached to a parsed page."""
+
+    figures = page_data.get("figures")
+    if not isinstance(figures, list):
+        return []
+    return [figure for figure in figures if isinstance(figure, Mapping)]
 
 
 def _source_segments(page_data: Mapping[str, Any]) -> list[tuple[str, list[str]]]:

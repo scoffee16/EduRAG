@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import re
+import time
 from collections.abc import Mapping, Sequence
 from typing import Any, Protocol
 
@@ -12,6 +13,11 @@ from qdrant_client.http import models as qdrant_models
 from edurage.core.config import get_settings
 from edurage.rag.keyword_retriever import extract_terms, keyword_score, matched_terms
 from edurage.rag.retriever import normalize_document_ids
+from edurage.rag.timing import (
+    Timings,
+    accepts_keyword_argument,
+    record_milliseconds,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +44,7 @@ class KeywordRetriever(Protocol):
         document_ids: Sequence[str] | None = None,
         candidates: Sequence[Mapping[str, Any]] | None = None,
         top_k: int | None = None,
+        timings: Timings | None = None,
     ) -> list[dict[str, Any]]: ...
 
 
@@ -49,6 +56,7 @@ class KeywordCandidateSource(Protocol):
         document_id: str | None = None,
         document_ids: Sequence[str] | None = None,
         limit: int,
+        timings: Timings | None = None,
     ) -> list[dict[str, Any]]: ...
 
 
@@ -68,6 +76,7 @@ class QdrantKeywordCandidateSource:
         document_id: str | None = None,
         document_ids: Sequence[str] | None = None,
         limit: int | None = None,
+        timings: Timings | None = None,
     ) -> list[dict[str, Any]]:
         scope = normalize_document_ids(document_ids, document_id)
         scan_limit = min(self.scan_limit, limit or self.scan_limit)
@@ -90,6 +99,7 @@ class QdrantKeywordCandidateSource:
         query_filter = qdrant_models.Filter(must=conditions) if conditions else None
         points: list[Any] = []
         offset = None
+        scan_started = time.perf_counter()
         while len(points) < scan_limit:
             batch_size = min(256, scan_limit - len(points))
             result = self.client.scroll(
@@ -116,6 +126,9 @@ class QdrantKeywordCandidateSource:
                 scan_limit,
                 self.collection_name,
             )
+        record_milliseconds(timings, "keyword_scan_ms", scan_started)
+        if timings is not None:
+            timings["keyword_scan_truncated"] = self.truncated
         return [
             {
                 "payload": dict(
@@ -230,16 +243,23 @@ class LocalKeywordRetriever:
         document_ids: Sequence[str] | None = None,
         candidates: Sequence[Mapping[str, Any]] | None = None,
         top_k: int | None = None,
+        timings: Timings | None = None,
     ) -> list[dict[str, Any]]:
+        started = time.perf_counter()
         scope = normalize_document_ids(document_ids, document_id)
         terms = extract_terms(question)
         source_candidates: Sequence[Mapping[str, Any]] = []
         if self.candidate_source is not None:
-            source_candidates = self.candidate_source.retrieve(
-                course_code=course_code,
-                document_ids=list(scope),
-                limit=self.scan_limit,
-            )
+            source_kwargs: dict[str, Any] = {
+                "course_code": course_code,
+                "document_ids": list(scope),
+                "limit": self.scan_limit,
+            }
+            if timings is not None and accepts_keyword_argument(
+                self.candidate_source.retrieve, "timings"
+            ):
+                source_kwargs["timings"] = timings
+            source_candidates = self.candidate_source.retrieve(**source_kwargs)
             self.last_scan_truncated = bool(
                 getattr(self.candidate_source, "truncated", False)
             )
@@ -260,6 +280,9 @@ class LocalKeywordRetriever:
             if hit["keyword_score"] > 0:
                 scored.append((index, hit))
         scored.sort(key=lambda pair: (-pair[1]["keyword_score"], pair[0]))
+        record_milliseconds(timings, "keyword_search_ms", started)
+        if timings is not None:
+            timings["keyword_hits"] = len(scored)
         return [hit for _, hit in scored[:top_k]]
 
 
@@ -314,6 +337,7 @@ class HybridRetriever:
         document_id: str | None = None,
         *,
         document_ids: Sequence[str] | None = None,
+        timings: Timings | None = None,
     ) -> list[dict[str, Any]]:
         scope = normalize_document_ids(document_ids, document_id)
         if scope and course_code is None:
@@ -326,7 +350,13 @@ class HybridRetriever:
         }
         if scope:
             vector_kwargs["document_ids"] = list(scope)
+        if timings is not None and accepts_keyword_argument(
+            self.vector_retriever.retrieve, "timings"
+        ):
+            vector_kwargs["timings"] = timings
+        vector_started = time.perf_counter()
         vector_hits = self.vector_retriever.retrieve(question, **vector_kwargs)
+        record_milliseconds(timings, "vector_retrieve_ms", vector_started)
         keyword_kwargs: dict[str, Any] = {
             "course_code": course_code,
             "candidates": vector_hits,
@@ -334,14 +364,30 @@ class HybridRetriever:
         }
         if scope:
             keyword_kwargs["document_ids"] = list(scope)
+        if timings is not None and accepts_keyword_argument(
+            self.keyword_retriever.retrieve, "timings"
+        ):
+            keyword_kwargs["timings"] = timings
         keyword_hits = self.keyword_retriever.retrieve(question, **keyword_kwargs)
+        if timings is not None:
+            timings["vector_candidates"] = len(vector_hits)
+            timings["keyword_candidates"] = len(keyword_hits)
+        fusion_started = time.perf_counter()
         hits = fuse_results(
             vector_hits,
             keyword_hits,
             vector_weight=self.vector_weight,
             keyword_weight=self.keyword_weight,
         )
-        return self.reranker.rerank(question, hits)[:limit]
+        record_milliseconds(timings, "fusion_ms", fusion_started)
+        rerank_started = time.perf_counter()
+        ranked = self.reranker.rerank(question, hits)[:limit]
+        record_milliseconds(timings, "rerank_ms", rerank_started)
+        if timings is not None:
+            timings["candidate_k"] = candidate_k
+            timings["fused_hits"] = len(hits)
+            timings["returned_hits"] = len(ranked)
+        return ranked
 
     __call__ = retrieve
 

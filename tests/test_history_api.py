@@ -21,6 +21,7 @@ _HISTORY_FIELDS = [
     "web_results",
     "model",
     "latency_ms",
+    "timings",
     "request_id",
     "created_at",
 ]

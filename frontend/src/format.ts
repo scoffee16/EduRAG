@@ -87,3 +87,9 @@ export function stagePercent(progress: DocumentProgress | null | undefined): num
   }
   return STAGE_PERCENT[progress.stage] ?? null
 }
+
+/** 耗时文案：不足 1 秒显示整数毫秒（`812 ms`），否则保留 1 位小数秒（`1.4 s`）；非法值返回空串。 */
+export function formatDurationMs(ms?: number | null): string {
+  if (ms == null || !Number.isFinite(ms) || ms < 0) return ''
+  return ms < 1000 ? `${Math.round(ms)} ms` : `${(ms / 1000).toFixed(1)} s`
+}

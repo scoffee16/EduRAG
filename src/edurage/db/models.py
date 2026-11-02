@@ -101,6 +101,7 @@ class QueryHistory(Base):
     )
     model: Mapped[str | None] = mapped_column(String(100), nullable=True)
     latency_ms: Mapped[float | None] = mapped_column(Float, nullable=True)
+    timings: Mapped[dict[str, Any] | None] = mapped_column(JSONType, nullable=True)
     request_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()

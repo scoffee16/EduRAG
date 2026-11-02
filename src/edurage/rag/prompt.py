@@ -102,6 +102,44 @@ def build_user_prompt(question: str, hits: Iterable[Mapping[str, Any]]) -> str:
     return f"问题：\n{question}\n\n检索片段：\n{formatted_hits}"
 
 
+def select_hits_within_budget(
+    hits: Iterable[Mapping[str, Any]],
+    *,
+    max_chars: int,
+) -> tuple[list[Mapping[str, Any]], int, int]:
+    """Keep the highest-ranked evidence that fits a character budget.
+
+    The retrieval order is already the relevance order, so the budget is applied
+    as a prefix: evidence is added while the formatted snippet block fits, and
+    the first overflow stops the selection (a smaller lower-ranked fragment is
+    not allowed to jump ahead of a larger higher-ranked one). At least one hit
+    is always kept so a grounded answer still has evidence to cite.
+
+    Returns ``(selected_hits, dropped_hits, used_chars)`` where ``used_chars`` is
+    the size of the formatted evidence block, excluding the question.
+    """
+
+    ordered = list(hits)
+    if not ordered:
+        return [], 0, 0
+    if max_chars <= 0:
+        # The budget is degenerate, but the answer still needs one citable hit.
+        block = _format_hit(ordered[0], 1)
+        return [ordered[0]], len(ordered) - 1, len(block)
+    selected: list[Mapping[str, Any]] = []
+    formatted: list[str] = []
+    used = 0
+    for hit in ordered:
+        block = _format_hit(hit, len(formatted) + 1)
+        cost = len(block) + (2 if formatted else 0)
+        if formatted and used + cost > max_chars:
+            break
+        selected.append(hit)
+        formatted.append(block)
+        used += cost
+    return selected, len(ordered) - len(selected), used
+
+
 def build_web_prompt(question: str, results: Iterable[Mapping[str, Any]]) -> str:
     """Build a user prompt containing the question and public web search results."""
 

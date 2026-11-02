@@ -1,6 +1,7 @@
 import type { FormEvent } from 'react'
 import { ArrowRight, LoaderCircle, MessageSquare } from 'lucide-react'
 import type { QueryResponse } from '../api'
+import { formatDurationMs } from '../format'
 import { resolveKnowledgeSources, SOURCE_CLASSES, SOURCE_LABELS } from '../sources'
 import AnswerMarkdown from './AnswerMarkdown'
 import CitationCard from './CitationCard'
@@ -25,6 +26,21 @@ interface AskPanelProps {
 function truncateSnippet(text: string | null | undefined) {
   const value = (text ?? '').trim()
   return value.length > 160 ? `${value.slice(0, 160)}…` : value
+}
+
+/** 摘要耗时：检索 / 首字 / 总计，缺失的阶段自动省略。 */
+function buildTimingItems(answer: QueryResponse | null): Array<{ label: string; value: string }> {
+  if (!answer) return []
+  const timings = answer.timings ?? {}
+  const items: Array<{ label: string; value: string }> = []
+  const retrieve = formatDurationMs(timings.retrieve_ms)
+  if (retrieve) items.push({ label: '检索', value: retrieve })
+  const firstToken = formatDurationMs(timings.first_token_ms)
+  if (firstToken) items.push({ label: '首字', value: firstToken })
+  // 生成过程中 latency_ms 还是占位 0，不展示「总计 0 ms」
+  const total = formatDurationMs(timings.total_ms ?? (answer.latency_ms > 0 ? answer.latency_ms : null))
+  if (total) items.push({ label: '总计', value: total })
+  return items
 }
 
 /** 主问答面板：提问、检索范围、Markdown/LaTeX 答案与引用来源。 */
@@ -59,6 +75,7 @@ export default function AskPanel({
     (source) => source !== 'course_materials',
   )
   const webResults = answer?.web_results ?? []
+  const timingItems = buildTimingItems(answer)
   return (
     <section className="panel qa-panel">
       <div className="panel-head qa-head">
@@ -134,7 +151,7 @@ export default function AskPanel({
         </StatusNotice>
       )}
 
-      {loading && (
+      {loading && !answer && (
         <div className="answer-skeleton" role="status" data-testid="answer-skeleton">
           <div className="skeleton-loading">
             <LoaderCircle className="spin" size={18} aria-hidden="true" />
@@ -149,14 +166,35 @@ export default function AskPanel({
         </div>
       )}
 
-      {answer && queryState === 'success' && (
-        <div className="answer-area">
+      {answer && queryState !== 'error' && (
+        <div className="answer-area" data-testid="answer-area">
           <div className="answer-meta">
             <span>回答</span>
-            <span>
-              {answer.model} · {Math.round(answer.latency_ms)} ms
-            </span>
+            {loading ? (
+              <span className="answer-meta-status" data-testid="streaming-indicator">
+                <LoaderCircle className="spin" size={13} aria-hidden="true" />
+                生成中…
+              </span>
+            ) : (
+              <span className="answer-meta-status">
+                {answer.model} · {Math.round(answer.latency_ms)} ms
+              </span>
+            )}
           </div>
+          {timingItems.length > 0 && (
+            <div className="query-timings" data-testid="query-timings">
+              {timingItems.map((item, index) => (
+                <span className="timing-chip" key={item.label}>
+                  {index > 0 && (
+                    <span className="timing-sep" aria-hidden="true">
+                      ·
+                    </span>
+                  )}
+                  <span className="timing-text">{`${item.label} ${item.value}`}</span>
+                </span>
+              ))}
+            </div>
+          )}
           {knowledgeSources.length > 0 && (
             <div className="source-badges" data-testid="knowledge-sources">
               <span className="source-label">知识来源</span>
@@ -223,9 +261,11 @@ export default function AskPanel({
               ))
             )}
           </div>
-          <div className="request-id">
-            request_id <code>{answer.request_id}</code>
-          </div>
+          {answer.request_id && (
+            <div className="request-id">
+              request_id <code>{answer.request_id}</code>
+            </div>
+          )}
         </div>
       )}
 

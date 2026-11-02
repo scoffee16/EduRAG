@@ -45,6 +45,7 @@ def test_model_columns_and_constraints() -> None:
         "web_results",
         "model",
         "latency_ms",
+        "timings",
         "request_id",
         "created_at",
     }

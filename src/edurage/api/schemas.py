@@ -127,6 +127,34 @@ class WebSearchResult(BaseModel):
     snippet: str = ""
 
 
+class QueryTimings(BaseModel):
+    """Measured latency segments and evidence budget for one answer.
+
+    Retrieval segments are collected by the retriever pipeline, generation
+    segments by the answer service. Missing segments stay ``None`` so clients can
+    tell "not measured" (for example, no web search was attempted) from zero.
+    """
+
+    retrieve_ms: float | None = None
+    query_embedding_ms: float | None = None
+    vector_search_ms: float | None = None
+    keyword_search_ms: float | None = None
+    fusion_ms: float | None = None
+    rerank_ms: float | None = None
+    web_search_ms: float | None = None
+    llm_ms: float | None = None
+    first_token_ms: float | None = None
+    total_ms: float | None = None
+    context_chars: int | None = None
+    dropped_hits: int | None = None
+    candidate_k: int | None = None
+    vector_candidates: int | None = None
+    keyword_candidates: int | None = None
+    fused_hits: int | None = None
+    returned_hits: int | None = None
+    keyword_scan_truncated: bool | None = None
+
+
 class QueryResponse(BaseModel):
     answer: str
     citations: list[Citation]
@@ -134,6 +162,7 @@ class QueryResponse(BaseModel):
     web_results: list[WebSearchResult] = []
     model: str
     latency_ms: float
+    timings: QueryTimings | None = None
     request_id: str
 
 
@@ -158,5 +187,6 @@ class QueryHistoryItem(BaseModel):
     web_results: list[WebSearchResult] = []
     model: str | None = None
     latency_ms: float | None = None
+    timings: QueryTimings | None = None
     request_id: str | None = None
     created_at: str

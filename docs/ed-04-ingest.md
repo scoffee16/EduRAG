@@ -75,11 +75,14 @@ table values. Tabular extraction order, including empty PPTX columns, is
 preserved. Flattened PDF cells retain extraction order; the chunker does
 not infer a missing two-dimensional table layout.
 
-Every emitted chunk has a positive 1-based page, a document-wide continuous
-zero-based `chunk_index`, and length at most `chunk_size`. Windows within a
-packed block share the requested character overlap. Independent blocks,
-sections, and pages do not gain artificial overlap. Windowing stops once
-the end is reached, avoiding a final window containing only repeated
+Every emitted text or OCR chunk has a positive 1-based page, a
+document-wide continuous zero-based `chunk_index`, and length at most
+`chunk_size`. Figure chunks (see VLM Figure Understanding) are atomic
+descriptions rather than character windows, so they are exempt from the
+`chunk_size` limit and are bounded by the VLM output limit instead. Windows
+within a packed block share the requested character overlap. Independent
+blocks, sections, and pages do not gain artificial overlap. Windowing stops
+once the end is reached, avoiding a final window containing only repeated
 overlap. With very small overlap, the preceding window can end earlier
 to avoid a tiny final tail. A genuinely short standalone page or section
 is retained even when shorter than 20 characters.
@@ -110,6 +113,112 @@ The indexer's `ocr_pages` count now counts provider calls, including such
 attempts, rather than only pages whose OCR text survives deduplication.
 Both PostgreSQL chunk metadata and Qdrant payload retain the source fields;
 modality remains in the existing dedicated chunk/payload field.
+
+## VLM Figure Understanding
+
+Image-heavy pages that previously indexed only their captions now get an
+optional, independent figure chunk. The feature is opt-in and off by
+default: with `vlm_enabled=false` the parser, chunker, and indexer output is
+byte-identical to the text/OCR path described above.
+
+### Trigger Rules
+
+For each PDF page, `parse_pdf` evaluates figures only when a describer was
+supplied. A page is eligible when all of the following hold:
+
+- raster images occupy at least `vlm_figure_min_image_ratio` of the page
+  area (computed by `page_image_area_ratio`, the same helper used by OCR);
+- the stripped page text is at most `vlm_figure_max_text_chars`
+  characters, so text-heavy pages keep their text-only representation;
+- at least one image rectangle survives clipping to the page bounds.
+
+At most `vlm_max_images_per_page` image rectangles are rendered, ordered by
+area (largest first), de-duplicated by image content hash, and clipped to
+the page. Each rectangle is rendered to PNG with the long side capped at
+1600 px (render scale at most 2x), so vision payloads stay bounded. Text
+extraction and OCR behavior are unchanged; figures are additive page
+records. Long text pages and pages with only small logos or icons are
+skipped by the two thresholds above.
+
+### Prompt And Output
+
+The describer uses an OpenAI-compatible vision endpoint configured by
+`vlm_base_url`, `vlm_api_key`, and `vlm_model` (default
+`qwen-vl-max`). The message carries the PNG as a base64 data URI plus a
+Chinese system prompt that instructs the model to describe only visible
+content, to write `无法识别` instead of guessing, and to emit structure:
+mind maps as an indented root -> child list, flowcharts as `A -> B` node
+chains, tables as headers plus rows, and coordinate charts with axis
+meanings. Output is capped by `MAX_DESCRIPTION_TOKENS` (400 tokens).
+Descriptions that are blank or only `无法识别` are dropped rather than
+indexed, and a rendered region may still be described by a later page
+ingestion because the cache is keyed by image content, not by page number.
+
+### Content-Addressed Cache
+
+Descriptions are cached under `vlm_cache_dir` as `{sha256}.json` files,
+keyed by the exact rendered PNG bytes. Cache writes are atomic
+(`mkstemp` + `os.replace`). Unreadable, corrupt, or empty entries are
+ignored and replaced on the next successful call, and cache I/O failures
+are logged without failing ingestion. Re-ingesting the same document
+therefore does not pay for the same image twice, even across processes.
+
+### Provenance And Retrieval
+
+A described figure becomes its own chunk after the page's text chunks:
+
+| Field | Figure chunk value |
+| --- | --- |
+| `block_type` | `figure` |
+| `modality` | `image` |
+| `text_sources` | `["vlm"]` |
+| `section` | Last detected section on the page, else `""` |
+| `text` | Structured Chinese description |
+
+Figure chunks share the page number and get the normal document-wide
+`chunk_index`; they are never merged into text windows. The existing
+`source`, `page_used_ocr`, `ocr_confidence`, and `ocr_error` fields are
+mirrored from the page, and the existing Qdrant payload / PostgreSQL chunk
+metadata construction propagates `block_type`, `modality`, and
+`text_sources` without schema changes. Citations can therefore identify
+figure-derived context as "第 N 页的图".
+
+### Failure Behavior And Limits
+
+VLM parsing is best-effort. A rendering error, an API error, a timeout, or
+an unusable response is logged and simply omits that figure; text/OCR
+ingestion always succeeds. Known limitations:
+
+- only raster image regions are handled; vector graphics, embedded
+  charts, and text-drawn diagrams are not rendered;
+- only PDF pages are covered; PPTX and DOCX figures are not parsed yet;
+- a real OpenAI-compatible VLM endpoint and API key are required; there is
+  no local fallback model;
+- figure descriptions are model-generated and may be imperfect; the
+  prompt asks the model to mark uncertain content as `无法识别`.
+
+### Offline Evaluation
+
+`python -m scripts.evaluate_figures --mode both` runs a deterministic
+offline evaluation over `tests/fixtures/figure_golden.py`: a generated
+ten-page PDF with five figure pages (mind map, flowchart, table, coordinate
+chart, mind map), three text-only pages, one long-text page with a large
+image, and one small-image page. A fake describer supplies fixed Chinese
+descriptions; a HashingEmbedder cosine retriever plus the local keyword
+retriever are fused exactly as in production retrieval.
+
+| Metric | Baseline (VLM off) | After (VLM on) |
+| --- | ---: | ---: |
+| Total chunks | 12 | 17 |
+| Figure chunks | 0 | 5 |
+| Figure recall@5 | 0.00 | 1.00 |
+| Figure page accuracy | 0.00 | 1.00 |
+
+Figure recall@5 counts questions whose figure page appears among the top-5
+hits, and figure page accuracy counts questions whose highest-ranked figure
+hit cites the correct page. The baseline cannot answer the five figure
+questions from caption text alone, while the VLM path retrieves the
+described figure chunks on the correct pages.
 
 ## Filename Contract
 
@@ -146,7 +255,10 @@ Offline tests use fake OCR and fake persistence adapters. They cover short
 cells, empty columns, short lines, captions, title/body association,
 independent sections/pages, continuous indices, long-window reconstruction,
 actual source metadata, OCR failure/deduplication, both CLI entrypoints,
-all three filename entrypoints, and compensation.
+all three filename entrypoints, and compensation. VLM figure tests cover
+cache hit/miss/corruption, the disabled path, payload shape, long-side
+downscaling, threshold and image-cap behavior, tolerated describer
+failures, figure chunk provenance, and indexer payload/metadata propagation.
 
 Required checks:
 
@@ -156,6 +268,7 @@ $env:TEMP = Join-Path $PWD ".tmp"
 $env:TMP = $env:TEMP
 $env:TMPDIR = $env:TEMP
 python -m pytest -q --basetemp .pytest-tmp
+python -m scripts.evaluate_figures --mode both
 docker compose config --quiet
 git diff --check
 ```

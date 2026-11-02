@@ -38,6 +38,7 @@ DEFAULT_SETTINGS = {
     "vector_weight": 0.6,
     "keyword_weight": 0.4,
     "candidate_k": 20,
+    "context_max_chars": 4000,
     "llm_temperature": 0.1,
     "llm_timeout_s": 60,
     "ocr_enabled": False,
@@ -47,6 +48,15 @@ DEFAULT_SETTINGS = {
     "ocr_min_text_chars": 80,
     "ocr_min_image_ratio": 0.35,
     "ocr_language": "chi_sim+eng",
+    "vlm_enabled": False,
+    "vlm_api_key": "replace-with-your-vlm-api-key",
+    "vlm_base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    "vlm_model": "qwen-vl-max",
+    "vlm_timeout_s": 60,
+    "vlm_cache_dir": ".cache/edurage/vlm",
+    "vlm_figure_min_image_ratio": 0.35,
+    "vlm_figure_max_text_chars": 600,
+    "vlm_max_images_per_page": 2,
 }
 
 
@@ -102,5 +112,17 @@ def test_ed01_settings_defaults() -> None:
     assert settings.vector_weight == 0.6
     assert settings.keyword_weight == 0.4
     assert settings.candidate_k == 20
+    assert settings.context_max_chars == 4000
     assert settings.llm_temperature == 0.1
     assert settings.llm_timeout_s == 60
+
+
+def test_vlm_settings_defaults() -> None:
+    settings = Settings(_env_file=None)
+
+    assert settings.vlm_enabled is False
+    assert settings.vlm_model == "qwen-vl-max"
+    assert settings.vlm_cache_dir == ".cache/edurage/vlm"
+    assert settings.vlm_figure_min_image_ratio == 0.35
+    assert settings.vlm_figure_max_text_chars == 600
+    assert settings.vlm_max_images_per_page == 2

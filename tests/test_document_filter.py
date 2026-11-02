@@ -164,6 +164,15 @@ class _FakeRetriever:
         return []
 
 
+def _calls_without_timings(retriever: _FakeRetriever) -> list[dict[str, Any]]:
+    """Drop the mutable timing sink; assertions below check query arguments only."""
+
+    return [
+        {key: value for key, value in call.items() if key != "timings"}
+        for call in retriever.calls
+    ]
+
+
 class _FakeLLM:
     settings = type("Settings", (), {"llm_model": "deepseek-chat"})()
 
@@ -183,7 +192,7 @@ def test_rag_service_forwards_normalized_document_ids_to_retriever() -> None:
         llm=_FakeLLM(),
     )
 
-    assert retriever.calls == [
+    assert _calls_without_timings(retriever) == [
         {
             "question": "问题",
             "course_code": "CS-DEMO",
@@ -191,6 +200,7 @@ def test_rag_service_forwards_normalized_document_ids_to_retriever() -> None:
             "document_ids": ["doc-1", "doc-2"],
         }
     ]
+    assert "timings" in retriever.calls[0]
 
 
 def test_rag_service_normalizes_legacy_document_id_for_retrievers() -> None:
@@ -204,7 +214,7 @@ def test_rag_service_normalizes_legacy_document_id_for_retrievers() -> None:
         llm=_FakeLLM(),
     )
 
-    assert retriever.calls == [
+    assert _calls_without_timings(retriever) == [
         {
             "question": "问题",
             "course_code": "CS-DEMO",

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from functools import lru_cache
 from typing import Any, Protocol
 
@@ -15,7 +15,7 @@ from edurage.ingest.indexer import IngestIndexer, create_default_indexer
 from edurage.rag.answerer import Answerer
 from edurage.rag.hybrid_retriever import build_hybrid_retriever
 from edurage.rag.retriever import Retriever
-from edurage.rag.service import answer_question
+from edurage.rag.service import answer_question, stream_answer_question
 from edurage.rag.web_search import create_web_search
 from edurage.storage.minio_client import MinioObjectStore, get_minio_client
 from edurage.vector.qdrant_client import QdrantDocumentStore, get_qdrant_client
@@ -70,6 +70,31 @@ class RAGService:
             llm=self.answerer,
             model=self.settings.llm_model,
             web_search=self.web_search,
+            context_max_chars=self.settings.context_max_chars,
+        )
+
+    def stream_answer_question(
+        self,
+        question: str,
+        course_code: str | None = None,
+        top_k: int | None = None,
+        document_id: str | None = None,
+        document_ids: list[str] | None = None,
+        *,
+        request_id: str | None = None,
+    ) -> Iterator[dict[str, Any]]:
+        return stream_answer_question(
+            question,
+            course_code,
+            top_k,
+            document_id=document_id,
+            document_ids=document_ids,
+            retriever=self.retriever,
+            llm=self.answerer,
+            model=self.settings.llm_model,
+            web_search=self.web_search,
+            context_max_chars=self.settings.context_max_chars,
+            request_id=request_id,
         )
 
 
@@ -99,6 +124,7 @@ class QueryHistoryRepository(Protocol):
         web_results: Sequence[Mapping[str, Any]] | None = None,
         model: str | None = None,
         latency_ms: float | None = None,
+        timings: Mapping[str, Any] | None = None,
         request_id: str | None = None,
     ) -> None: ...
 

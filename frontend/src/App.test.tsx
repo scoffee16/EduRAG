@@ -78,6 +78,128 @@ const DEFAULT_ANSWER = {
   request_id: 'req-answer-1',
   knowledge_sources: ['course_materials'],
   web_results: [],
+  // 非流式接口新增的可选耗时字段（回退路径使用）
+  timings: {
+    retrieve_ms: 700,
+    llm_ms: 900,
+    first_token_ms: 1000,
+    total_ms: 1700,
+    context_chars: 800,
+    dropped_hits: 0,
+  },
+}
+
+/* -------------------------------------------------------------------------- */
+/*  流式（SSE）测试数据与工具                                                  */
+/* -------------------------------------------------------------------------- */
+
+const DEFAULT_STREAM_META = {
+  request_id: 'req-answer-1',
+  model: 'mock-model',
+  knowledge_sources: ['course_materials'],
+  citations: DEFAULT_ANSWER.citations,
+  web_results: [],
+  timings: {
+    retrieve_ms: 812,
+    query_embedding_ms: 120,
+    vector_search_ms: 240,
+    keyword_search_ms: 90,
+    fusion_ms: 30,
+    rerank_ms: 150,
+    context_chars: 1200,
+    dropped_hits: 2,
+  },
+}
+
+const DEFAULT_STREAM_DONE = {
+  answer: DEFAULT_ANSWER.answer,
+  latency_ms: 2600,
+  first_token_ms: 1400,
+  timings: { retrieve_ms: 812, llm_ms: 1200, first_token_ms: 1400, total_ms: 2600 },
+}
+
+/** 默认流式响应里累积后应等于 DEFAULT_ANSWER.answer。 */
+const DEFAULT_STREAM_TOKENS = [
+  '**重点**：',
+  'ADD 指令的微地址序列。\n\n| 步骤 | 说明 |\n| --- | --- |\n| T1 | 取指 |\n\n',
+  '公式 ',
+  '$E=mc^2$。',
+]
+
+interface SseFrame {
+  event: string
+  data: unknown
+}
+
+function sseFrame(event: string, data: unknown): string {
+  return `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`
+}
+
+/** 默认流式响应体：meta + 分批 token + done。 */
+function defaultStreamBody(): string {
+  return [
+    sseFrame('meta', DEFAULT_STREAM_META),
+    ...DEFAULT_STREAM_TOKENS.map((text) => sseFrame('token', { text })),
+    sseFrame('done', DEFAULT_STREAM_DONE),
+  ].join('')
+}
+
+function streamResponse(chunks: Uint8Array[]): Response {
+  const body = new ReadableStream<Uint8Array>({
+    start(controller) {
+      chunks.forEach((chunk) => controller.enqueue(chunk))
+      controller.close()
+    },
+  })
+  return new Response(body, {
+    status: 200,
+    headers: { 'Content-Type': 'text/event-stream', 'X-Request-ID': 'req-answer-1' },
+  })
+}
+
+function sseResponse(body: string): Response {
+  return streamResponse([new TextEncoder().encode(body)])
+}
+
+/** 按固定字节数切块，模拟网络分包（会切在行 / JSON / UTF-8 字符中间）。 */
+function chunkedSseResponse(body: string, chunkSize: number): Response {
+  const bytes = new TextEncoder().encode(body)
+  const chunks: Uint8Array[] = []
+  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+    chunks.push(bytes.slice(offset, offset + chunkSize))
+  }
+  return streamResponse(chunks)
+}
+
+/** 手动控制推送时机的 SSE 响应：验证「token 到达即渲染」与中止行为。 */
+function controlledSse() {
+  const encoder = new TextEncoder()
+  let controller: ReadableStreamDefaultController<Uint8Array> | null = null
+  let cancelled = false
+  const body = new ReadableStream<Uint8Array>({
+    start(next) {
+      controller = next
+    },
+    cancel() {
+      cancelled = true
+    },
+  })
+  const response = new Response(body, {
+    status: 200,
+    headers: { 'Content-Type': 'text/event-stream', 'X-Request-ID': 'req-answer-1' },
+  })
+  return {
+    response,
+    /** 推送原始 SSE 文本（可跨事件、可跨 chunk）。 */
+    push(text: string) {
+      if (cancelled) return
+      controller?.enqueue(encoder.encode(text))
+    },
+    close() {
+      if (!cancelled) controller?.close()
+    },
+    isCancelled: () => cancelled,
+  }
 }
 
 /** 历史问答记录：全课程检索（document_scope 为空数组）。 */
@@ -177,6 +299,7 @@ interface MockHandlers {
   documentDetail?: (documentId: string) => Response | Promise<Response>
   deleteDocument?: (documentId: string) => Response | Promise<Response>
   query?: (body: QueryBody) => Response | Promise<Response>
+  queryStream?: (body: QueryBody) => Response | Promise<Response>
   history?: () => Response | Promise<Response>
   ocr?: () => Response | Promise<Response>
 }
@@ -187,6 +310,8 @@ interface MockServer {
   matching: (fragment: string) => RecordedRequest[]
   /** 符合片段的请求数量。 */
   count: (fragment: string) => number
+  /** 按 pathname 精确匹配（避免 /api/v1/query 命中 /api/v1/query/stream）。 */
+  matchingPath: (pathname: string) => RecordedRequest[]
 }
 
 function installFetch(handlers: MockHandlers = {}): MockServer {
@@ -265,6 +390,12 @@ function installFetch(handlers: MockHandlers = {}): MockServer {
       return handlers.history?.() ?? json([])
     }
 
+    if (path.endsWith('/query/stream')) {
+      const queryBody =
+        typeof body === 'string' ? (JSON.parse(body) as QueryBody) : ({} as QueryBody)
+      return handlers.queryStream?.(queryBody) ?? sseResponse(defaultStreamBody())
+    }
+
     if (path.includes('/query')) {
       const queryBody =
         typeof body === 'string' ? (JSON.parse(body) as QueryBody) : ({} as QueryBody)
@@ -277,7 +408,14 @@ function installFetch(handlers: MockHandlers = {}): MockServer {
   vi.stubGlobal('fetch', fetchMock)
 
   const matching = (fragment: string) => requests.filter((request) => request.url.includes(fragment))
-  return { requests, matching, count: (fragment: string) => matching(fragment).length }
+  const matchingPath = (pathname: string) =>
+    requests.filter((request) => new URL(request.url, 'http://localhost').pathname === pathname)
+  return {
+    requests,
+    matching,
+    count: (fragment: string) => matching(fragment).length,
+    matchingPath,
+  }
 }
 
 function deferred<T>() {
@@ -675,7 +813,7 @@ describe('EduRAG 前端工作流', () => {
   it('问答失败（429）展示错误与 request_id，并提示稍后重试', async () => {
     const user = userEvent.setup()
     installFetch({
-      query: () =>
+      queryStream: () =>
         json(
           { error: { code: 'busy', message: '服务繁忙' }, request_id: 'req-429' },
           { status: 429 },
@@ -690,6 +828,175 @@ describe('EduRAG 前端工作流', () => {
     expect(await screen.findByText('问答失败')).toBeInTheDocument()
     expect(screen.getByText('服务繁忙 请稍后重试。')).toBeInTheDocument()
     expect(screen.getByText('req-429')).toBeInTheDocument()
+  })
+
+  it('流式问答：token 到达即渲染部分答案，meta 来源与 done 耗时逐步展示', async () => {
+    const user = userEvent.setup()
+    const stream = controlledSse()
+    installFetch({ queryStream: () => stream.response })
+    render(<App />)
+
+    await screen.findByText('讲义.pdf')
+    await user.type(screen.getByPlaceholderText(/ADD 指令/), '流式问题')
+    await user.click(screen.getByRole('button', { name: '开始问答' }))
+
+    // 流刚建立、还没有任何事件时仍展示骨架屏
+    expect(await screen.findByTestId('answer-skeleton')).toBeInTheDocument()
+
+    // meta 到达：还没有 token，但来源 / 引用 / request_id / 检索耗时已可展示
+    await act(async () => {
+      stream.push(sseFrame('meta', DEFAULT_STREAM_META))
+      await sleep(0)
+    })
+
+    const answerArea = await screen.findByTestId('answer-area')
+    expect(within(answerArea).getByTestId('streaming-indicator')).toBeInTheDocument()
+    expect(within(answerArea).getByTestId('knowledge-sources')).toHaveTextContent('课程资料')
+    expect(within(answerArea).getByText('讲义.pdf')).toBeInTheDocument()
+    expect(within(answerArea).getByText('req-answer-1')).toBeInTheDocument()
+    expect(within(answerArea).getByTestId('query-timings')).toHaveTextContent('检索 812 ms')
+
+    // 第一段 token 到达即增量渲染，无需等待 done
+    await act(async () => {
+      stream.push(sseFrame('token', { text: '**重点**：' }))
+      await sleep(0)
+    })
+    expect(await screen.findByText('重点')).toBeInTheDocument()
+    expect(screen.getByTestId('streaming-indicator')).toBeInTheDocument()
+
+    // 剩余 token + done：结束生成态，展示完整耗时
+    await act(async () => {
+      for (const text of DEFAULT_STREAM_TOKENS.slice(1)) {
+        stream.push(sseFrame('token', { text }))
+      }
+      stream.push(sseFrame('done', DEFAULT_STREAM_DONE))
+      await sleep(0)
+    })
+
+    await waitFor(() =>
+      expect(screen.queryByTestId('streaming-indicator')).not.toBeInTheDocument(),
+    )
+    expect(screen.getByTestId('answer-area')).toHaveTextContent('req-answer-1')
+    const timings = screen.getByTestId('query-timings')
+    expect(timings).toHaveTextContent('检索 812 ms')
+    expect(timings.textContent).toContain('首字 1.4 s')
+    expect(timings.textContent).toContain('总计 2.6 s')
+    // Markdown 表格与 LaTeX 公式照常渲染
+    expect(screen.getByRole('table')).toBeInTheDocument()
+    expect(document.querySelector('.katex')).not.toBeNull()
+  })
+
+  it('SSE 解析容忍任意分包：跨 chunk 的事件、CRLF 与注释/未知事件', async () => {
+    const user = userEvent.setup()
+    const raw = [
+      ': keep-alive\n\n',
+      `event: meta\r\ndata: ${JSON.stringify(DEFAULT_STREAM_META)}\r\n\r\n`,
+      'event: token\r\ndata: {"text":"分段"}\r\n\r\n',
+      'event: token\r\ndata: {"text":"到达"}\r\n\r\n',
+      'event: custom\r\ndata: {"ignored":true}\r\n\r\n',
+      `event: done\r\ndata: ${JSON.stringify({ ...DEFAULT_STREAM_DONE, answer: '分段到达' })}\n\n`,
+    ].join('')
+    installFetch({ queryStream: () => chunkedSseResponse(raw, 2) })
+    render(<App />)
+
+    await screen.findByText('讲义.pdf')
+    await user.type(screen.getByPlaceholderText(/ADD 指令/), '分包问题')
+    await user.click(screen.getByRole('button', { name: '开始问答' }))
+
+    const answerArea = await screen.findByTestId('answer-area')
+    expect(await within(answerArea).findByText('分段到达')).toBeInTheDocument()
+    expect(within(answerArea).getByTestId('query-timings')).toHaveTextContent('检索 812 ms')
+    expect(screen.queryByText('问答失败')).not.toBeInTheDocument()
+  })
+
+  it('流式中途 error 事件：展示错误信息与 request_id，并丢弃部分答案', async () => {
+    const user = userEvent.setup()
+    const stream = controlledSse()
+    installFetch({ queryStream: () => stream.response })
+    render(<App />)
+
+    await screen.findByText('讲义.pdf')
+    await user.type(screen.getByPlaceholderText(/ADD 指令/), '中途失败')
+    await user.click(screen.getByRole('button', { name: '开始问答' }))
+
+    await act(async () => {
+      stream.push(sseFrame('meta', DEFAULT_STREAM_META))
+      stream.push(sseFrame('token', { text: '部分答案' }))
+      await sleep(0)
+    })
+    expect(await screen.findByText('部分答案')).toBeInTheDocument()
+
+    await act(async () => {
+      stream.push(
+        sseFrame('error', {
+          error: { code: 'llm_error', message: '模型生成失败' },
+          request_id: 'req-stream-err',
+        }),
+      )
+      await sleep(0)
+    })
+
+    expect(await screen.findByText('问答失败')).toBeInTheDocument()
+    expect(screen.getByText('模型生成失败')).toBeInTheDocument()
+    expect(screen.getByText('req-stream-err')).toBeInTheDocument()
+    expect(screen.queryByTestId('answer-area')).not.toBeInTheDocument()
+    expect(screen.queryByText('部分答案')).not.toBeInTheDocument()
+  })
+
+  it('切换课程会中止仍在进行的流式问答，迟到的 token 不再渲染', async () => {
+    const user = userEvent.setup()
+    const stream = controlledSse()
+    installFetch({ queryStream: () => stream.response })
+    render(<App />)
+
+    await screen.findByText('讲义.pdf')
+    await user.type(screen.getByPlaceholderText(/ADD 指令/), '流式问题')
+    await user.click(screen.getByRole('button', { name: '开始问答' }))
+
+    await act(async () => {
+      stream.push(sseFrame('meta', DEFAULT_STREAM_META))
+      stream.push(sseFrame('token', { text: '旧回答' }))
+      await sleep(0)
+    })
+    expect(await screen.findByText('旧回答')).toBeInTheDocument()
+
+    await user.selectOptions(screen.getByLabelText('课程'), 'CS-OS')
+    // 中止信号会立即取消底层 SSE 读取
+    await waitFor(() => expect(stream.isCancelled()).toBe(true))
+    await waitFor(() => expect(screen.queryByTestId('answer-area')).not.toBeInTheDocument())
+
+    // 即使底层还有迟到数据，也不应再影响页面
+    await act(async () => {
+      stream.push(sseFrame('token', { text: '迟到的回答' }))
+      stream.push(sseFrame('done', DEFAULT_STREAM_DONE))
+      await sleep(0)
+    })
+    expect(screen.queryByText('迟到的回答')).not.toBeInTheDocument()
+    expect(screen.queryByText('旧回答')).not.toBeInTheDocument()
+  })
+
+  it('响应体不可读时回退到非流式接口并正常渲染答案', async () => {
+    const user = userEvent.setup()
+    const server = installFetch({
+      queryStream: () => {
+        const response = json({}, { headers: { 'Content-Type': 'text/event-stream' } })
+        Object.defineProperty(response, 'body', { value: null })
+        return response
+      },
+    })
+    render(<App />)
+
+    await screen.findByText('讲义.pdf')
+    await user.type(screen.getByPlaceholderText(/ADD 指令/), '回退问题')
+    await user.click(screen.getByRole('button', { name: '开始问答' }))
+
+    expect(await screen.findByText('重点')).toBeInTheDocument()
+    expect(screen.getByText('req-answer-1')).toBeInTheDocument()
+    // 非流式接口返回的 timings 也用于展示
+    expect(screen.getByTestId('query-timings')).toHaveTextContent('检索 700 ms')
+    // 先请求流式接口，发现响应体不可读后回退到非流式接口
+    expect(server.count('/api/v1/query/stream')).toBe(1)
+    expect(server.matchingPath('/api/v1/query')).toHaveLength(1)
   })
 
   it('OCR 健康检查返回 503 时展示 OCR 不可用警告', async () => {
@@ -837,19 +1144,28 @@ describe('EduRAG 前端工作流', () => {
   it('问答展示知识来源 badge、非课程资料警示与联网搜索来源', async () => {
     const user = userEvent.setup()
     installFetch({
-      query: () =>
-        json({
-          ...DEFAULT_ANSWER,
-          citations: [],
-          knowledge_sources: ['course_materials', 'web_search'],
-          web_results: [
-            {
-              title: '指令周期 - 维基百科',
-              url: 'https://example.com/instruction-cycle',
-              snippet: '指令周期包含取指、译码、执行等阶段。',
-            },
-          ],
-        }),
+      queryStream: () =>
+        sseResponse(
+          [
+            sseFrame('meta', {
+              ...DEFAULT_STREAM_META,
+              citations: [],
+              knowledge_sources: ['course_materials', 'web_search'],
+              web_results: [
+                {
+                  title: '指令周期 - 维基百科',
+                  url: 'https://example.com/instruction-cycle',
+                  snippet: '指令周期包含取指、译码、执行等阶段。',
+                },
+              ],
+            }),
+            sseFrame('token', { text: '指令周期包含取指、译码、执行等阶段。' }),
+            sseFrame('done', {
+              ...DEFAULT_STREAM_DONE,
+              answer: '指令周期包含取指、译码、执行等阶段。',
+            }),
+          ].join(''),
+        ),
     })
     render(<App />)
 
@@ -870,7 +1186,9 @@ describe('EduRAG 前端工作流', () => {
     expect(link).toHaveAttribute('href', 'https://example.com/instruction-cycle')
     expect(link).toHaveAttribute('target', '_blank')
     expect(link.getAttribute('rel')).toContain('noopener')
-    expect(screen.getByText(/取指、译码、执行/)).toBeInTheDocument()
+    // 联网搜索来源的 snippet 与流式回答正文都包含这段文字
+    expect(within(screen.getByTestId('web-results')).getByText(/取指、译码、执行/)).toBeInTheDocument()
+    expect(screen.getByTestId('answer-markdown')).toHaveTextContent('取指、译码、执行')
   })
 
   it('刷新文档列表成功后展示带时间的 transient 提示，并自动消失', async () => {

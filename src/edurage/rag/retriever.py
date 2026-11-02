@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import time
 from collections.abc import Iterable, Mapping, Sequence
 from typing import Any, Protocol
 
 from qdrant_client.http import models as qdrant_models
 
 from edurage.core.config import get_settings
+from edurage.rag.timing import Timings, record_milliseconds
 
 
 class Embedder(Protocol):
@@ -170,11 +172,14 @@ class Retriever:
         document_id: str | None = None,
         *,
         document_ids: Sequence[str] | None = None,
+        timings: Timings | None = None,
     ) -> list[dict[str, Any]]:
         scope = normalize_document_ids(document_ids, document_id)
         if scope and course_code is None:
             raise ValueError("course_code is required when document_ids is provided")
+        embedding_started = time.perf_counter()
         vector = _embed_query(self.embedder, question)
+        record_milliseconds(timings, "query_embedding_ms", embedding_started)
         limit = top_k or int(_setting("top_k", 5))
         kwargs: dict[str, Any] = {
             "collection_name": self.collection_name,
@@ -194,7 +199,9 @@ class Retriever:
             conditions.append(_document_condition(scope))
         if conditions:
             kwargs["query_filter"] = _CompatFilter(must=conditions)
+        search_started = time.perf_counter()
         result = _search(self.client, kwargs)
+        record_milliseconds(timings, "vector_search_ms", search_started)
         points = getattr(result, "points", result)
         hits = [
             hit
@@ -206,6 +213,8 @@ class Retriever:
                 document_ids=scope,
             )
         ]
+        if timings is not None:
+            timings["vector_hits"] = len(hits)
         return sorted(hits, key=_score, reverse=True)
 
     __call__ = retrieve
@@ -221,6 +230,7 @@ def retrieve(
     embedder: Embedder,
     client: QdrantClient,
     collection_name: str = "edurage_chunks",
+    timings: Timings | None = None,
 ) -> list[dict[str, Any]]:
     """Functional wrapper around :class:`Retriever`."""
 
@@ -230,4 +240,5 @@ def retrieve(
         top_k,
         document_id,
         document_ids=document_ids,
+        timings=timings,
     )

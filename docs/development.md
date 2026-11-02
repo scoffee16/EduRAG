@@ -47,6 +47,13 @@ scanned documents. The frozen `/api/v1/health` liveness contract is unchanged.
 Automated tests use a fake provider and do not access the network. Real-engine
 checks are integration-only and skipped by default.
 
+Optional VLM figure understanding uses the same OpenAI-compatible client, so
+no extra Python dependency is needed. Set `EDURAGE_VLM_ENABLED=true` and fill
+`EDURAGE_VLM_API_KEY` / `EDURAGE_VLM_MODEL` (for example `qwen-vl-max`) to let
+image-heavy PDF pages be described by the vision model. Figure descriptions are
+cached under `EDURAGE_VLM_CACHE_DIR` and indexed as independent `figure` chunks;
+offline tests always use a deterministic fake describer.
+
 PowerShell:
 
 ```powershell
@@ -189,6 +196,87 @@ be injected to add candidates from another local index. Candidate retrieval
 defaults to 20 before the requested `top_k` is returned; weights default to
 0.6 vector and 0.4 keyword. Existing page and document metadata is retained.
 
+## Streaming and Timing (ED-05)
+
+`POST /api/v1/query/stream` streams one answer as server-sent events. Query
+both endpoints through `uvicorn` and observe the timing breakdown:
+
+```powershell
+$env:PYTHONPATH='src'
+$env:EDURAGE_QDRANT_URL='http://127.0.0.1:6333'
+$env:EDURAGE_POSTGRES_DSN='postgresql+psycopg://edurage:edurage@127.0.0.1:5432/edurage'
+$env:EDURAGE_MINIO_ENDPOINT='127.0.0.1:9000'
+python -m uvicorn edurage.main:app --host 127.0.0.1 --port 8010
+```
+
+```powershell
+curl.exe -N -X POST http://127.0.0.1:8010/api/v1/query/stream `
+  -H "Content-Type: application/json" `
+  -d '{ "question": "动态规划算法的基本要素有哪些？", "course_code": "1", "top_k": 5 }'
+```
+
+The stream sequence is `meta` (citations + timings after retrieval),
+`token` (repeated), then `done` (full answer, `first_token_ms`, `timings`).
+Streaming responses hold the in-process concurrency permit until the body is
+complete. The frontend uses this endpoint by default and falls back to the
+JSON endpoint when the body stream is unavailable. The JSON endpoint keeps its
+response shape and adds an optional `timings` object; both paths persist the
+breakdown in `query_history.timings`.
+
+`python -m pytest -q tests/test_stream_query_api.py tests/test_timings.py
+tests/test_answerer_stream.py tests/test_middleware_streaming.py` covers the
+streaming contract, stage timing, evidence budget, and permit release without
+network access.
+
+## Retrieval Benchmark (ED-05)
+
+`scripts/benchmark_retrieval.py` measures the real hybrid retriever against the
+live Qdrant collection and prints nearest-rank P50/P95 per stage:
+
+```powershell
+python -m scripts.benchmark_retrieval --repeats 3 --limit 8 --json .tmp/benchmark.json
+```
+
+Measured values and the stage-by-stage interpretation are recorded in
+[ed-05-performance.md](ed-05-performance.md). The script requires the same host
+environment overrides as the API run above (the `.env` file points at Docker
+service names). `--mode fixture` exercises the timing pipeline offline without
+any external call.
+
+## VLM Figure Parsing (ED-04 ingest)
+
+When `EDURAGE_VLM_ENABLED=true`, pages with high image area and little text are
+rendered and sent to the configured vision model; the structured description is
+indexed as a `block_type=figure` chunk with `text_sources=["vlm"]` and
+`modality="image"`. The offline test suite uses a fake describer, so no network
+or real VLM key is needed for CI:
+
+```powershell
+python -m pytest -q tests/test_figure_describer.py tests/test_figure_parsing.py tests/test_evaluate_figures.py
+python -m scripts.evaluate_figures --mode both   # offline deterministic fixture
+```
+
+The cache is content-addressed by image SHA-256 under
+`EDURAGE_VLM_CACHE_DIR`; a describe failure is logged and skipped, never failing
+the document ingestion. Live checks require a real vision-model key; record only
+sanitized outcomes.
+
+## Real-Corpus Evaluation (ED-04)
+
+The real courseware set has 40 annotated questions (page-level gold pages) over
+the indexed PDF/PPTX documents. The scripts need the host environment overrides
+above plus real embedding/LLM keys in `.env`:
+
+```powershell
+python -m scripts.evaluate_courseware --mode both --limit 40   # retrieval: vector-only vs hybrid
+python -m scripts.evaluate_answers --limit 20                  # faithfulness / citation coverage
+```
+
+Current numbers, the honest hybrid-retrieval regression finding, and the
+annotation methodology are documented in
+[ed-04-evaluation.md](ed-04-evaluation.md). Offline metric/judge tests:
+`python -m pytest -q tests/test_evaluate_courseware.py tests/test_faithfulness.py tests/test_evaluate_answers.py`.
+
 ## Known Issues
 
 ### Starlette/httpx third-party deprecation warning
@@ -237,7 +325,36 @@ discovery:
   packs under `configs/course_packs/*.yaml` are synchronized into PostgreSQL at
   API startup (best-effort, idempotent).
 - New columns (`course_packs.description`, `course_packs.updated_at`,
-  `documents.status`) are added by the idempotent migration in
-  `src/edurage/db/migrations.py`, which `scripts/init_db.py` and the API
-  lifespan both run; `Base.metadata.create_all()` alone does not alter existing
-  tables.
+  `documents.status`, `query_history.timings`) are added by the idempotent
+  migration in `src/edurage/db/migrations.py`, which `scripts/init_db.py` and
+  the API lifespan both run; `Base.metadata.create_all()` alone does not alter
+  existing tables.
+
+### Real-corpus hybrid retrieval regression
+
+On the 40-question real courseware set (OCR'd PDF pages), hybrid retrieval
+currently scores lower than vector-only (Recall@5 0.750 vs 0.975). This is a
+measured, documented negative result, not an annotation error: candidate
+mechanisms are presence-based CJK n-gram keyword scoring, RRF fusion, and the
+deterministic reranker's identifier bonuses promoting clean but wrong pages
+over OCR-noisy gold pages. The deterministic offline 8-question fixture still
+shows the intended 0.625 → 1.000 improvement, so do not remove the keyword path
+to fix the real-corpus number without re-running both evaluations. Details:
+[ed-04-evaluation.md](ed-04-evaluation.md).
+
+### VLM figure parsing live check
+
+Offline tests cover figure parsing with a deterministic fake describer. A live
+VLM check needs `EDURAGE_VLM_ENABLED=true` and a real vision-model key; without
+it, `build_figure_describer` returns `None` and ingestion behaves exactly as
+before (the figure path is byte-identical when disabled). Do not report a live
+figure-recognition result from the fake describer.
+
+### Streaming client contract
+
+Clients must check the HTTP status before reading the socket: pre-stream
+failures use the JSON error envelope, while mid-stream failures end with an
+`error` frame under HTTP `200`. Partial tokens received before an `error` frame
+are not a complete answer. A streamed query is persisted only after the `done`
+event.
+

@@ -7,6 +7,7 @@ from typing import Literal, NotRequired, TypedDict
 
 from edurage.core.config import Settings, get_settings
 from edurage.ingest.docx_parser import parse_docx
+from edurage.ingest.figure_describer import FigureSegment, build_figure_describer
 from edurage.ingest.ocr import OCRProvider, build_ocr_provider
 from edurage.ingest.pdf_parser import TextSegment, parse_pdf
 from edurage.ingest.pptx_parser import parse_pptx
@@ -23,6 +24,7 @@ class ParsedDocumentPage(TypedDict):
     ocr_error: NotRequired[str | None]
     text_segments: NotRequired[list[TextSegment]]
     page_used_ocr: NotRequired[bool]
+    figures: NotRequired[list[FigureSegment]]
 
 
 def detect_file_type(path: str | Path) -> Literal["pdf", "pptx", "docx"]:
@@ -74,6 +76,10 @@ def parse_document(
                 ocr_min_text_chars=settings.ocr_min_text_chars,
                 ocr_min_image_ratio=settings.ocr_min_image_ratio,
                 ocr_language=settings.ocr_language,
+                figure_describer=build_figure_describer(settings),
+                figure_min_image_ratio=settings.vlm_figure_min_image_ratio,
+                figure_max_text_chars=settings.vlm_figure_max_text_chars,
+                figure_max_images_per_page=settings.vlm_max_images_per_page,
             )
     elif file_type == "docx":
         pages = parse_docx(document_path)
@@ -91,5 +97,7 @@ def parse_document(
             normalized["ocr_confidence"] = page.get("ocr_confidence")
         if "ocr_error" in page:
             normalized["ocr_error"] = page["ocr_error"]
+        if "figures" in page:
+            normalized["figures"] = page["figures"]
         result.append(normalized)
     return result

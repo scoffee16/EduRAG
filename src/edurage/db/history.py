@@ -86,6 +86,7 @@ def _history_item(row: QueryHistory) -> dict[str, Any]:
         "web_results": list(row.web_results or []),
         "model": row.model,
         "latency_ms": row.latency_ms,
+        "timings": dict(row.timings) if row.timings else None,
         "request_id": row.request_id,
         "created_at": _created_at_iso(row.created_at),
     }
@@ -109,6 +110,7 @@ class SqlAlchemyQueryHistoryRepository:
         web_results: Sequence[Mapping[str, Any]] | None = None,
         model: str | None = None,
         latency_ms: float | None = None,
+        timings: Mapping[str, Any] | None = None,
         request_id: str | None = None,
     ) -> None:
         """Persist one answered question together with its scope snapshots."""
@@ -131,6 +133,7 @@ class SqlAlchemyQueryHistoryRepository:
                     web_results=[dict(item) for item in (web_results or [])],
                     model=model,
                     latency_ms=latency_ms,
+                    timings=dict(timings) if timings else None,
                     request_id=request_id,
                 )
             )

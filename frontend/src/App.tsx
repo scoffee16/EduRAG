@@ -3,6 +3,8 @@ import { FileText, Server } from 'lucide-react'
 import {
   ApiError,
   askQuestion,
+  askQuestionStream,
+  StreamingUnsupportedError,
   createCourse,
   deleteCourse,
   deleteDocument,
@@ -18,7 +20,9 @@ import {
   type DocumentSummary,
   type HistoryItem,
   type OcrHealth,
+  type QueryPayload,
   type QueryResponse,
+  type QueryStreamMeta,
 } from './api'
 import { fileExtension, formatClock } from './format'
 import AskPanel from './components/AskPanel'
@@ -261,6 +265,8 @@ export default function App({
   // 切换课程：立即重载文档列表，并清空限定选择与上一次回答。
   // 手动新建模式下 courseCode 为空，创建成功前不会用输入值请求文档。
   useEffect(() => {
+    // 课程切换后上一次问答的流式响应已失去上下文，主动中止
+    queryRequest.current?.abort()
     setSelectedDocuments([])
     setAnswer(null)
     setQueryState('idle')
@@ -508,29 +514,77 @@ export default function App({
     setAnswer(null)
     // 限定文档：有选择时传 1..N 个 document_ids；全课程则不传（兼容旧后端字段也不传）
     const documentIds = [...selectedDocuments]
-    try {
-      const result = await askQuestion(
-        {
-          question: question.trim(),
-          course_code: code,
-          ...(documentIds.length > 0 ? { document_ids: documentIds } : {}),
-          top_k: topK,
-        },
-        controller.signal,
-      )
-      if (!controller.signal.aborted) {
-        setAnswer(result)
-        setQueryState('success')
-        // 问答成功：后台刷新历史记录（失败不影响当前回答）
-        void loadHistory()
-      }
-    } catch (error) {
-      if ((error as Error).name === 'AbortError') return
+    const payload: QueryPayload = {
+      question: question.trim(),
+      course_code: code,
+      ...(documentIds.length > 0 ? { document_ids: documentIds } : {}),
+      top_k: topK,
+    }
+
+    // 流式过程中的部分回答：meta 先给出模型/引用/知识来源，token 逐步累积正文
+    const streamState: { meta: QueryStreamMeta | null; streamed: string } = {
+      meta: null,
+      streamed: '',
+    }
+    const commitPartial = () => {
+      if (controller.signal.aborted) return
+      setAnswer({
+        answer: streamState.streamed,
+        citations: streamState.meta?.citations ?? [],
+        model: streamState.meta?.model ?? '',
+        latency_ms: 0,
+        request_id: streamState.meta?.request_id ?? '',
+        knowledge_sources: streamState.meta?.knowledge_sources,
+        web_results: streamState.meta?.web_results,
+        timings: streamState.meta?.timings ?? undefined,
+      })
+    }
+
+    const settleSuccess = (result: QueryResponse) => {
+      if (controller.signal.aborted) return
+      setAnswer(result)
+      setQueryState('success')
+      // 问答成功：后台刷新历史记录（失败不影响当前回答）
+      void loadHistory()
+    }
+
+    const settleError = (error: unknown) => {
       setQueryState('error')
       setQueryError({
         message: errorText(error),
         requestId: error instanceof ApiError ? error.requestId : undefined,
       })
+    }
+
+    try {
+      const result = await askQuestionStream(
+        payload,
+        {
+          onMeta: (meta) => {
+            streamState.meta = meta
+            commitPartial()
+          },
+          onToken: (text) => {
+            streamState.streamed += text
+            commitPartial()
+          },
+        },
+        controller.signal,
+      )
+      settleSuccess(result)
+    } catch (error) {
+      if ((error as Error).name === 'AbortError' || controller.signal.aborted) return
+      // 环境不支持流式读取（如 response.body 不可用）时回退到非流式接口
+      if (error instanceof StreamingUnsupportedError) {
+        try {
+          settleSuccess(await askQuestion(payload, controller.signal))
+        } catch (fallbackError) {
+          if ((fallbackError as Error).name === 'AbortError' || controller.signal.aborted) return
+          settleError(fallbackError)
+        }
+        return
+      }
+      settleError(error)
     }
   }
 

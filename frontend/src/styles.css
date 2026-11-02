@@ -778,6 +778,39 @@ pre {
   color: var(--gray-700);
 }
 
+/* 流式生成中的状态（answer-meta 右侧） */
+.answer-meta-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+/* 回答摘要耗时：检索 / 首字 / 总计 */
+.query-timings {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px var(--space-1);
+  margin: calc(-1 * var(--space-1)) 0 var(--space-2);
+  font-size: var(--font-xs);
+  color: var(--gray-500);
+}
+
+.timing-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-variant-numeric: tabular-nums;
+}
+
+.timing-sep {
+  color: var(--gray-300);
+}
+
+.timing-text {
+  white-space: nowrap;
+}
+
 .answer-markdown {
   font-size: var(--font-md);
   line-height: 1.72;

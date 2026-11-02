@@ -2,17 +2,25 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import NotRequired, TypedDict
 
 import pymupdf
 
+from edurage.ingest.figure_describer import (
+    FigureDescriber,
+    FigureSegment,
+    render_region_png,
+)
 from edurage.ingest.ocr import (
     OcrPageResult,
     OCRProvider,
     page_image_area_ratio,
     should_ocr_page,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class TextSegment(TypedDict):
@@ -33,6 +41,7 @@ class ParsedPage(TypedDict):
     ocr_error: NotRequired[str | None]
     text_segments: NotRequired[list[TextSegment]]
     page_used_ocr: NotRequired[bool]
+    figures: NotRequired[list[FigureSegment]]
 
 
 def parse_pdf(
@@ -44,6 +53,10 @@ def parse_pdf(
     ocr_min_text_chars: int = 80,
     ocr_min_image_ratio: float = 0.35,
     ocr_language: str = "chi_sim+eng",
+    figure_describer: FigureDescriber | None = None,
+    figure_min_image_ratio: float = 0.35,
+    figure_max_text_chars: int = 600,
+    figure_max_images_per_page: int = 2,
 ) -> list[ParsedPage]:
     """Extract text page by page while preserving the PDF's original page numbers."""
 
@@ -54,6 +67,12 @@ def parse_pdf(
         raise FileNotFoundError(pdf_path)
     if ocr_dpi <= 0:
         raise ValueError("ocr_dpi must be positive")
+    if not 0.0 <= figure_min_image_ratio <= 1.0:
+        raise ValueError("figure_min_image_ratio must be between 0 and 1")
+    if figure_max_text_chars < 0:
+        raise ValueError("figure_max_text_chars must be non-negative")
+    if figure_max_images_per_page < 0:
+        raise ValueError("figure_max_images_per_page must be non-negative")
     use_ocr = ocr_provider is not None if ocr_enabled is None else ocr_enabled
     if use_ocr and ocr_provider is None:
         raise ValueError("ocr_provider is required when ocr_enabled is true")
@@ -66,9 +85,20 @@ def parse_pdf(
             for page_number, page in enumerate(document, start=1):
                 text = page.get_text("text")
                 if not use_ocr:
-                    pages.append(
-                        {"page": page_number, "text": text, "page_used_ocr": False}
+                    page_record: ParsedPage = {
+                        "page": page_number,
+                        "text": text,
+                        "page_used_ocr": False,
+                    }
+                    _attach_page_figures(
+                        page,
+                        page_record,
+                        describer=figure_describer,
+                        min_image_ratio=figure_min_image_ratio,
+                        max_text_chars=figure_max_text_chars,
+                        max_images=figure_max_images_per_page,
                     )
+                    pages.append(page_record)
                     continue
 
                 result: OcrPageResult | None = None
@@ -102,21 +132,131 @@ def parse_pdf(
                     segments.append({"text": text.rstrip(), "source": "text"})
                 if "ocr" in sources:
                     segments.append({"text": result.text.strip(), "source": "ocr"})
-                pages.append(
-                    {
-                        "page": page_number,
-                        "text": merged,
-                        "source_type": "pdf",
-                        "text_sources": sources,
-                        "ocr_confidence": result.confidence if result else None,
-                        "ocr_error": ocr_error,
-                        "text_segments": segments,
-                        "page_used_ocr": page_used_ocr,
-                    }
+                page_record = {
+                    "page": page_number,
+                    "text": merged,
+                    "source_type": "pdf",
+                    "text_sources": sources,
+                    "ocr_confidence": result.confidence if result else None,
+                    "ocr_error": ocr_error,
+                    "text_segments": segments,
+                    "page_used_ocr": page_used_ocr,
+                }
+                _attach_page_figures(
+                    page,
+                    page_record,
+                    describer=figure_describer,
+                    min_image_ratio=figure_min_image_ratio,
+                    max_text_chars=figure_max_text_chars,
+                    max_images=figure_max_images_per_page,
                 )
+                pages.append(page_record)
             return pages
     except pymupdf.FileDataError as exc:
         raise ValueError(f"Invalid PDF file: {pdf_path}") from exc
+
+
+def _attach_page_figures(
+    page: pymupdf.Page,
+    page_record: ParsedPage,
+    *,
+    describer: FigureDescriber | None,
+    min_image_ratio: float,
+    max_text_chars: int,
+    max_images: int,
+) -> None:
+    """Add VLM figure descriptions to one page record when VLM parsing is enabled."""
+
+    if describer is None:
+        return
+    page_record["figures"] = _page_figures(
+        page,
+        page_number=page_record["page"],
+        text=page_record["text"],
+        describer=describer,
+        min_image_ratio=min_image_ratio,
+        max_text_chars=max_text_chars,
+        max_images=max_images,
+    )
+
+
+def _page_figures(
+    page: pymupdf.Page,
+    *,
+    page_number: int,
+    text: str,
+    describer: FigureDescriber,
+    min_image_ratio: float,
+    max_text_chars: int,
+    max_images: int,
+) -> list[FigureSegment]:
+    """Describe up to ``max_images`` rendered image regions of an eligible page."""
+
+    if max_images == 0 or len(text.strip()) > max_text_chars:
+        return []
+    if page_image_area_ratio(page) < min_image_ratio:
+        return []
+    figures: list[FigureSegment] = []
+    seen_hashes: set[str] = set()
+    for rect in _image_rects_by_area(page):
+        if len(figures) >= max_images:
+            break
+        try:
+            image, image_hash = render_region_png(page, rect)
+        except Exception:
+            logger.warning(
+                "Failed to render a figure region on page %d", page_number, exc_info=True
+            )
+            continue
+        if image_hash in seen_hashes:
+            continue
+        seen_hashes.add(image_hash)
+        try:
+            description = describer.describe(image, page=page_number)
+        except Exception:
+            logger.warning(
+                "VLM figure description failed on page %d", page_number, exc_info=True
+            )
+            continue
+        if not description.usable:
+            logger.info("VLM returned an empty figure description on page %d", page_number)
+            continue
+        figures.append(
+            {
+                "text": description.text.strip(),
+                "image_hash": description.image_hash or image_hash,
+            }
+        )
+    return figures
+
+
+def _image_rects_by_area(page: pymupdf.Page) -> list[pymupdf.Rect]:
+    """Return image placement rectangles on a page, largest first."""
+
+    placed: list[tuple[float, pymupdf.Rect]] = []
+    seen: set[tuple[int, float, float, float, float]] = set()
+    for image in page.get_images(full=True):
+        try:
+            xref = int(image[0])
+        except (TypeError, ValueError):
+            continue
+        for rect in page.get_image_rects(xref):
+            clipped = pymupdf.Rect(rect) & page.rect
+            if clipped.width <= 0 or clipped.height <= 0:
+                continue
+            key = (
+                xref,
+                round(clipped.x0, 2),
+                round(clipped.y0, 2),
+                round(clipped.x1, 2),
+                round(clipped.y1, 2),
+            )
+            if key in seen:
+                continue
+            seen.add(key)
+            placed.append((clipped.width * clipped.height, clipped))
+    placed.sort(key=lambda item: (-item[0], item[1].y0, item[1].x0))
+    return [rect for _, rect in placed]
 
 
 def _merge_page_text(original: str, ocr_text: str) -> tuple[str, list[str]]:

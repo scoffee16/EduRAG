@@ -47,6 +47,7 @@ class Settings(BaseSettings):
     vector_weight: float = 0.6
     keyword_weight: float = 0.4
     candidate_k: int = 20
+    context_max_chars: int = 4000
     llm_temperature: float = 0.1
     llm_timeout_s: int = 60
     ocr_enabled: bool = False
@@ -56,6 +57,17 @@ class Settings(BaseSettings):
     ocr_min_text_chars: int = 80
     ocr_min_image_ratio: float = 0.35
     ocr_language: str = "chi_sim+eng"
+
+    # Multimodal figure understanding (VLM) for image-heavy pages.
+    vlm_enabled: bool = False
+    vlm_api_key: str = "replace-with-your-vlm-api-key"
+    vlm_base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    vlm_model: str = "qwen-vl-max"
+    vlm_timeout_s: int = 60
+    vlm_cache_dir: str = ".cache/edurage/vlm"
+    vlm_figure_min_image_ratio: float = 0.35
+    vlm_figure_max_text_chars: int = 600
+    vlm_max_images_per_page: int = 2
 
 
 @lru_cache

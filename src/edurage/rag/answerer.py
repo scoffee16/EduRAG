@@ -1,8 +1,13 @@
-"""LLM answer generation for grounded RAG responses."""
+"""LLM answer generation for grounded RAG responses.
+
+Both blocking and streaming generation share the same prompts and client
+plumbing. Streaming generation yields raw text deltas so the API layer can
+forward them as server-sent events while the answer is still being produced.
+"""
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from typing import Any, Protocol
 
 from edurage.core.config import Settings, get_settings
@@ -40,6 +45,22 @@ def _message_content(response: Any) -> str:
     return str(content or "").strip()
 
 
+def _stream_delta(chunk: Any) -> str:
+    """Extract the incremental text delta from one streaming chat chunk."""
+
+    choices = getattr(chunk, "choices", None)
+    if choices is None and isinstance(chunk, Mapping):
+        choices = chunk.get("choices")
+    first_choice = choices[0] if choices else None
+    delta = getattr(first_choice, "delta", None)
+    if delta is None and isinstance(first_choice, Mapping):
+        delta = first_choice.get("delta", {})
+    content = getattr(delta, "content", None)
+    if content is None and isinstance(delta, Mapping):
+        content = delta.get("content")
+    return str(content or "")
+
+
 class Answerer:
     """Call the configured OpenAI-compatible chat completion client."""
 
@@ -51,16 +72,36 @@ class Answerer:
         self.settings = settings or get_settings()
         self.client = client or get_llm_client(self.settings)
 
+    def _messages(self, system_prompt: str, user_prompt: str) -> list[dict[str, str]]:
+        return [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ]
+
     def _complete(self, system_prompt: str, user_prompt: str) -> str:
         response = create_chat_completion(
             self.client,
             model=self.settings.llm_model,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
+            messages=self._messages(system_prompt, user_prompt),
         )
         return _message_content(response)
+
+    def _stream(self, system_prompt: str, user_prompt: str) -> Iterator[str]:
+        response = create_chat_completion(
+            self.client,
+            model=self.settings.llm_model,
+            messages=self._messages(system_prompt, user_prompt),
+            stream=True,
+        )
+        try:
+            for chunk in response:
+                delta = _stream_delta(chunk)
+                if delta:
+                    yield delta
+        finally:
+            close = getattr(response, "close", None)
+            if callable(close):
+                close()
 
     def answer(self, question: str, hits: list[Mapping[str, Any]]) -> str:
         """Answer from retrieved course-material fragments."""
@@ -76,5 +117,22 @@ class Answerer:
         """Answer from the model's own general knowledge as a last resort."""
 
         return self._complete(GENERAL_SYSTEM_PROMPT, build_general_prompt(question))
+
+    def stream_answer(self, question: str, hits: list[Mapping[str, Any]]) -> Iterator[str]:
+        """Stream an answer grounded in retrieved course-material fragments."""
+
+        return self._stream(SYSTEM_PROMPT, build_user_prompt(question, hits))
+
+    def stream_answer_from_web(
+        self, question: str, results: list[Mapping[str, Any]]
+    ) -> Iterator[str]:
+        """Stream an answer from public web search results."""
+
+        return self._stream(WEB_SEARCH_SYSTEM_PROMPT, build_web_prompt(question, results))
+
+    def stream_answer_from_general(self, question: str) -> Iterator[str]:
+        """Stream an answer from the model's own general knowledge."""
+
+        return self._stream(GENERAL_SYSTEM_PROMPT, build_general_prompt(question))
 
     __call__ = answer
