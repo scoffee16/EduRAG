@@ -59,7 +59,7 @@ npm run dev                    # http://localhost:5173
 
 - API 文档：<http://127.0.0.1:8000/docs>；健康检查：`curl.exe http://127.0.0.1:8000/api/v1/health`
 - Windows 也可双击 `start_edurage.bat` 一键启动（首次使用前同样需要配置 `.env`）
-- 本地开发（不用容器跑 API）：见 [docs/development.md](docs/development.md)
+- 本地开发 / IDE（`.venv` 解释器、依赖安装与启动脚本）：见 [docs/development.md](docs/development.md)
 
 ## 配置
 
@@ -81,7 +81,7 @@ npm run dev                    # http://localhost:5173
 
 接口统一以 `/api/v1` 为前缀，错误响应为 `{"error":{"code","message"},"request_id"}`：
 
-- `POST /upload` 上传课件（异步）、`GET /documents` / `DELETE /documents/{id}` 文档管理
+- `POST /upload` 上传课件（异步）、`GET /documents` / `GET /documents/{id}` / `DELETE /documents/{id}` 文档管理与解析进度
 - `POST /query` 课程范围内问答（JSON，返回分段 `timings`）
 - `POST /query/stream` 同一请求体的 SSE 流式问答（`meta` / `token` / `done` / `error` 事件）
 - `GET /history` 查询历史（含每条记录的 `timings` 快照）
@@ -94,7 +94,7 @@ npm run dev                    # http://localhost:5173
 
 ```powershell
 python -m pip install -e ".[dev]"
-python -m pytest -q                  # 394 项后端测试（离线、无网络）
+python -m pytest -q                  # 395 项后端测试（离线、无网络）
 python -m ruff check .
 cd frontend; npm install; npm test   # 37 项前端测试
 ```

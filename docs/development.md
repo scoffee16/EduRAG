@@ -84,6 +84,15 @@ python -m pip install --upgrade pip
 python -m pip install -e ".[dev]"
 ```
 
+### IDE
+
+Point your editor's Python interpreter at the virtual environment created above
+(`.venv\Scripts\python.exe` on Windows, `.venv/bin/python` elsewhere). The editable
+install already makes `edurage` importable, and `pyproject.toml` sets
+`pythonpath = ["src"]` for tests, so no extra `PYTHONPATH` configuration is needed.
+Install the optional OCR extra (`python -m pip install -e ".[dev,ocr]"`) if you want
+editor resolution for `Pillow` / `pytesseract`.
+
 ## Run
 
 After the application module is available:
