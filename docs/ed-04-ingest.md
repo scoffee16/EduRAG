@@ -194,7 +194,8 @@ an unusable response is logged and simply omits that figure; text/OCR
 ingestion always succeeds. Known limitations:
 
 - only raster image regions are handled; vector graphics, embedded
-  charts, and text-drawn diagrams are not rendered;
+  charts, and text-drawn diagrams are not rendered (see *Vector Graphics
+  Figures (Planned)* below);
 - only PDF pages are covered; PPTX and DOCX figures are not parsed yet;
 - a real OpenAI-compatible VLM endpoint and API key are required; there is
   no local fallback model;
@@ -257,6 +258,43 @@ then ingest with `IngestIndexer.prepare_document` + `IngestIndexer.ingest_pdf`
 (or upload through the API once `vlm_enabled` is set in the service
 environment). Figure chunks land in Qdrant with `block_type="figure"`,
 `modality="image"`, and `text_sources=["vlm"]`.
+
+### Vector Graphics Figures (Planned)
+
+The current gate is raster-only: `page_image_area_ratio` counts embedded
+image XObjects (`page.get_images` / `get_image_rects`), so a page whose
+flowchart, tree, or coordinate plot is drawn as PDF path commands reports a
+ratio near zero and never reaches the describer. Real Chinese courseware
+exposes this often: one greedy-algorithm page with an optimal-substructure
+tree and an activity-interval chart has 79 vector drawing paths and only a
+6% template raster; a dynamic-programming page renders its table as vector
+cells. Table borders, formula glyphs, and slide furniture are also path
+commands, which is why "just cluster every drawing" needs filtering.
+
+Planned options, in the order they will be attempted:
+
+1. **Path clustering + region rendering.** Collect
+   `page.get_drawings()` bounding boxes, drop page-sized background
+   rectangles and regions that overlap text lines, merge nearby strokes
+   into connected regions, require a minimum region area and stroke
+   density, then render the region with `get_pixmap(clip=...)` and reuse
+   the existing describer and content-addressed cache. No new services or
+   models, but the thresholds are heuristic and diagrams interleaved with
+   body text can be split.
+2. **Layout detection.** Render the page and run a document-layout model
+   (PP-Structure, DocLayout-YOLO, MinerU, ...) to obtain figure/table
+   boxes, then crop and describe them. Robust for raster and vector
+   content alike and also recovers tables, at the cost of a heavy
+   dependency and a GPU-friendly deployment.
+3. **Whole-page vision prompt.** Send the rendered page to the vision
+   model and ask for structure (optionally with bounding boxes). Cheapest
+   to implement, but costs more tokens per page, mixes body text with
+   figure content, and gives no region-level provenance.
+
+The likely sequence is (1) as an opt-in path validated on the real
+courseware set, with (2) added if recall is insufficient. The current
+configuration stays raster-oriented; a dedicated vector-area threshold and
+a vector-figure fixture would ship together with the implementation.
 
 ## Filename Contract
 

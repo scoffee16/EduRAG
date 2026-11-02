@@ -24,7 +24,7 @@ EduRAG 是一个**可自托管的课程级 RAG 问答系统**：把 PDF / PPTX /
 - **混合检索**：Qdrant 向量召回 + 关键词打分（标识符 / 中文 n-gram），加权 RRF 融合后确定性重排。
 - **可核验引用**：按「文档 + 页码 / 幻灯片 / 章节」去重，附原文片段、模态、OCR 与图注来源信息。
 - **结构感知解析**：PDF / PPTX / DOCX 按页、幻灯片、标题层级解析；扫描版 PDF 可选择开启 Tesseract OCR。
-- **VLM 图表理解**：图片占比高、文本少的 PDF 页面可交给多模态模型生成结构化描述，作为独立 `figure` 块参与检索与引用（默认关闭）。
+- **上传即图结构识别**：图片占比高、文本少的 PDF 页面（流程图 / 思维导图 / 图表 / 表格截图）在上传解析时交给多模态模型，生成结构化描述并作为独立 `figure` 块参与检索与引用；由 `EDURAGE_VLM_ENABLED` 控制（课件场景建议开启，`.env.example` 默认关闭以免新环境产生付费调用）。
 - **流式回答 + 分段耗时**：SSE 逐 token 返回，前端边收边渲染；`timings` 返回检索 / 首字 / 生成各阶段耗时并写入查询历史。
 - **证据上下文预算**：注入 Prompt 的片段按相关性前缀受字符预算约束，超出预算的命中记入 `dropped_hits`。
 - **异步导入**：上传立即返回 `202`，前端轮询展示 `parse → chunk → embed → store` 进度。
@@ -72,7 +72,7 @@ npm run dev                    # http://localhost:5173
 | `EDURAGE_LLM_MODEL` / `EDURAGE_EMBEDDING_MODEL` | 模型名，默认 `deepseek-chat` / `text-embedding-v3` |
 | `EDURAGE_OCR_ENABLED` | 扫描版 PDF OCR，默认关闭（需本机 Tesseract） |
 | `EDURAGE_CONTEXT_MAX_CHARS` | 注入 Prompt 的证据字符预算，默认 `4000` |
-| `EDURAGE_VLM_ENABLED` / `EDURAGE_VLM_MODEL` | 图片页图表理解开关与视觉模型名，默认关闭 |
+| `EDURAGE_VLM_ENABLED` / `EDURAGE_VLM_MODEL` | 上传时图结构识别开关与视觉模型名；课件场景建议开启 |
 | `EDURAGE_API_RATE_LIMIT_PER_MINUTE` / `EDURAGE_API_MAX_CONCURRENCY` | 单进程限流与并发（默认 60/min、2） |
 
 > `.env` 已被 `.gitignore` 忽略，不会提交。Compose 会为 API 注入容器内部服务地址；`.env.example` 中的存储地址面向宿主机本地开发。
@@ -120,10 +120,10 @@ CI 包含 Python 3.11 / 3.12 / 3.13 后端测试、前端构建与测试、`dock
 - **依赖第三方云 API**：默认使用 DeepSeek + DashScope，课件片段与问题会发送到对应服务，不支持离线推理；VLM 图表理解还需要额外的视觉模型 Key。
 - **异步导入非持久队列**：使用进程内 `BackgroundTasks`，重启可能中断任务；限流与并发控制仅对单进程生效，建议只跑一个 API worker。
 - **引用粒度有限**：到页 / 幻灯片 / 章节；OCR 仅处理扫描版 PDF 页面；前端未容器化。
-- **VLM 图表理解有限**：仅对图片占比高、文本少的 PDF 页面触发，覆盖位图区域；每页重复的模板小图/装饰条会在渲染前被过滤；描述受模型 400 token 输出上限约束（密集图可能被截断）；PPTX/DOCX 图表尚未支持；figure 块作为原子描述可超过 `chunk_size`。
+- **VLM 图表理解有限**：仅对图片占比高、文本少的 PDF 页面触发，且只覆盖位图图片区域；用矢量路径绘制的流程图/树/坐标图（真实中文课件里很常见）目前不会被发现，计划见 [docs/ed-04-ingest.md](docs/ed-04-ingest.md) 的矢量图章节；每页重复的模板小图/装饰条会在渲染前被过滤；描述受模型 400 token 输出上限约束（密集图可能被截断）；PPTX/DOCX 图表尚未支持；figure 块作为原子描述可超过 `chunk_size`。
 - **真实语料上混合检索尚未证明优于纯向量**：见上方评测与 [docs/ed-04-evaluation.md](docs/ed-04-evaluation.md)；调参与重排策略仍在迭代。
 - **单轮问答**：没有会话、多轮上下文与长期记忆子系统；`query_history` 只用于展示与评测，不参与检索或生成。
-- **规划项未实现**：知识图谱、Agent 工具链、Cross-Encoder 重排、多轮会话与长期记忆等。
+- **规划项未实现**：矢量图形与布局模型识图、知识图谱、Agent 工具链、Cross-Encoder 重排、多轮会话与长期记忆等。
 
 ## 文档
 

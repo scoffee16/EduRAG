@@ -49,10 +49,12 @@ checks are integration-only and skipped by default.
 
 Optional VLM figure understanding uses the same OpenAI-compatible client, so
 no extra Python dependency is needed. Set `EDURAGE_VLM_ENABLED=true` and fill
-`EDURAGE_VLM_API_KEY` / `EDURAGE_VLM_MODEL` (for example `qwen-vl-max`) to let
-image-heavy PDF pages be described by the vision model. Figure descriptions are
-cached under `EDURAGE_VLM_CACHE_DIR` and indexed as independent `figure` chunks;
-offline tests always use a deterministic fake describer.
+`EDURAGE_VLM_API_KEY` / `EDURAGE_VLM_MODEL` (for example `qwen3-vl-plus`) to let
+image-heavy PDF pages be described by the vision model during upload. Figure
+descriptions are cached under `EDURAGE_VLM_CACHE_DIR` and indexed as independent
+`figure` chunks; Compose mounts a named volume at `/home/edurage/.cache/edurage`
+so paid descriptions survive container rebuilds, and offline tests always use a
+deterministic fake describer.
 
 PowerShell:
 

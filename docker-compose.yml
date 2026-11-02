@@ -58,17 +58,20 @@ services:
       EDURAGE_OCR_MIN_TEXT_CHARS: ${EDURAGE_OCR_MIN_TEXT_CHARS:-80}
       EDURAGE_OCR_MIN_IMAGE_RATIO: ${EDURAGE_OCR_MIN_IMAGE_RATIO:-0.35}
       EDURAGE_OCR_LANGUAGE: ${EDURAGE_OCR_LANGUAGE:-chi_sim+eng}
-      # Optional VLM figure understanding; disabled by default and needs a
-      # separate vision-model key before image-heavy pages are described.
+      # Multimodal diagram/figure understanding. Enable it in .env for
+      # courseware deployments (one vision call per figure page); the cache
+      # volume below keeps paid descriptions across container rebuilds.
       EDURAGE_VLM_ENABLED: ${EDURAGE_VLM_ENABLED:-false}
       EDURAGE_VLM_API_KEY: ${EDURAGE_VLM_API_KEY:-replace-with-your-vlm-api-key}
       EDURAGE_VLM_BASE_URL: ${EDURAGE_VLM_BASE_URL:-https://dashscope.aliyuncs.com/compatible-mode/v1}
-      EDURAGE_VLM_MODEL: ${EDURAGE_VLM_MODEL:-qwen-vl-max}
+      EDURAGE_VLM_MODEL: ${EDURAGE_VLM_MODEL:-qwen3-vl-plus}
       EDURAGE_VLM_TIMEOUT_S: ${EDURAGE_VLM_TIMEOUT_S:-60}
       EDURAGE_VLM_CACHE_DIR: ${EDURAGE_VLM_CACHE_DIR:-/home/edurage/.cache/edurage/vlm}
       EDURAGE_VLM_FIGURE_MIN_IMAGE_RATIO: ${EDURAGE_VLM_FIGURE_MIN_IMAGE_RATIO:-0.35}
       EDURAGE_VLM_FIGURE_MAX_TEXT_CHARS: ${EDURAGE_VLM_FIGURE_MAX_TEXT_CHARS:-600}
-      EDURAGE_VLM_MAX_IMAGES_PER_PAGE: ${EDURAGE_VLM_MAX_IMAGES_PER_PAGE:-2}
+      EDURAGE_VLM_MAX_IMAGES_PER_PAGE: ${EDURAGE_VLM_MAX_IMAGES_PER_PAGE:-4}
+    volumes:
+      - edurage_vlm_cache:/home/edurage/.cache/edurage
     depends_on:
       postgres:
         condition: service_healthy
@@ -154,3 +157,4 @@ volumes:
   postgres_data:
   qdrant_data:
   minio_data:
+  edurage_vlm_cache:
